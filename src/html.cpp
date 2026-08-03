@@ -37,7 +37,9 @@ void handleRoot() {
   html += ".field{flex:1;min-width:220px;}";
   html += ".field label,.single label{display:block;font-weight:bold;margin-bottom:6px;color:#556270;font-size:14px;}";
   html += ".field input,.single input{width:100%;padding:10px;border:1px solid #bfc9d6;border-radius:8px;font-size:15px;background:#fff;}";
-  html += ".field input[type=checkbox]{width:auto;padding:0;margin-right:6px;transform:translateY(2px);}";
+  // Phai co ca .single: dong tren cho .single input width:100% + padding:10px, neu khong
+  // override o day thi 3 o tick (MQTT/OSC/DHCP) bi keo dan full chieu rong, day chu ra xa.
+  html += ".field input[type=checkbox],.single input[type=checkbox]{width:auto;padding:0;margin-right:6px;transform:translateY(2px);}";
   html += ".single{margin:10px 0;}";
   html += "#d{background:#eef7ff;border-left:5px solid #2196F3;padding:12px;border-radius:10px;margin-bottom:18px;line-height:1.7;}";
   html += ".btn{width:100%;padding:14px;border:none;border-radius:10px;background:#2196F3;color:white;font-size:16px;font-weight:bold;cursor:pointer;margin-top:8px;}";
