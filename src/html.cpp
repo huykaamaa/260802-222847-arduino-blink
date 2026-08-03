@@ -84,11 +84,14 @@ void handleRoot() {
   html += "<div class='single'><label>IP</label><input name='mqtt_ip' value='" + htmlEscape(mqttServer) + "'></div>";
   html += "<div class='single'><label>Port</label><input name='mqtt_port' value='" + String(mqttPort) + "'></div>";
   html += "<div class='single'><label>User</label><input name='mqtt_user' value='" + htmlEscape(mqttUser) + "'></div>";
-  html += "<div class='single'><label>Pass</label><input type='password' name='mqtt_pass' value='" + htmlEscape(mqttPass) + "'></div>";
+  // KHONG do mqttPass ra HTML: trang "/" khong yeu cau dang nhap (de dashboard tu refresh
+  // duoc), nen "value=" o day dong nghia voi ai xem duoc trang cung doc duoc mat khau broker
+  // bang View Source. De trong = giu nguyen, giong o cach auth_pass ben duoi.
+  html += "<div class='single'><label>Pass</label><input type='password' name='mqtt_pass' placeholder='(giữ nguyên nếu để trống)'></div>";
   html += "<div class='single'><label>Topic gốc</label><input name='mqtt_topic' value='" + htmlEscape(mqttTopic) + "'></div>";
   html += "<div class='single'><label>Giá trị khi CÓ</label><input name='mqtt_full' value='" + htmlEscape(mqttFullValue) + "'></div>";
   html += "<div class='single'><label>Giá trị khi TRỐNG</label><input name='mqtt_missing' value='" + htmlEscape(mqttMissingValue) + "'></div>";
-  html += "<div class='note'>Mỗi vị trí tự publish vào &lt;topic gốc&gt;/&lt;1..6&gt;, payload chỉ là giá trị. Ví dụ topic gốc '" + htmlEscape(mqttTopic) + "' → vị trí 3 publish vào '" + htmlEscape(mqttTopic) + "/3'.</div>";
+  html += "<div class='note'>Mỗi vị trí tự publish vào &lt;topic gốc&gt;/&lt;1..6&gt;, payload chỉ là giá trị. Ví dụ topic gốc '" + htmlEscape(mqttTopic) + "' → vị trí 3 publish vào '" + htmlEscape(mqttTopic) + "/3'. Ô Pass để trống nghĩa là giữ nguyên mật khẩu đang dùng (mật khẩu không được hiển thị lại ở đây).</div>";
   html += "</div>";
 
   html += "<div class='panel'>";

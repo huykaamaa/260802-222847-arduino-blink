@@ -42,6 +42,10 @@ extern const uint8_t relayPins[SENSOR_NUM];
 #define RELAY_OFF LOW
 #define RELAY_TEST_PULSE_MS 2000UL
 
+// Local UDP port de mo socket OSC (chi gui di, khong nghe). Tach ra hang so de khong bi
+// nham voi oscPort (port DICH, cau hinh duoc tren web).
+#define OSC_LOCAL_PORT 9000
+
 // ======================================================================
 // STATE / CONFIG - dinh nghia trong main.cpp
 // ======================================================================
@@ -101,7 +105,15 @@ extern unsigned long heartbeatInterval;
 extern bool sensorEnable[SENSOR_NUM];
 extern bool relayState[SENSOR_NUM];   // trang thai da debounce cua sensor
 extern bool relayOutput[SENSOR_NUM];  // trang thai relay THUC TE (da gate enable + test), hien len web
-extern unsigned long relayTestUntil[SENSOR_NUM]; // nut Test tren web: ep relay ON tam thoi
 
 // dinh nghia trong main.cpp, goi tu web.cpp (nut Test tren web)
 void triggerRelayTest(int id);
+
+// true neu vi tri dang trong xung Test 2s. Dung ham chung (thay vi tu so sanh moc thoi gian
+// o moi cho) de logic chong tran millis() chi nam o 1 noi - xem main.cpp.
+bool relayTestActive(int id);
+
+// Gui lai trang thai HIEN TAI cua ca 6 vi tri qua MQTT/OSC, dung nguyen topic/dia chi/gia tri
+// binh thuong - chi la "nhac lai" cue gan nhat, khong phai message rieng. Dung cho heartbeat
+// dinh ky va cho buoc ket thuc chuoi Test. Dinh nghia trong main.cpp.
+void resyncAllPositions();

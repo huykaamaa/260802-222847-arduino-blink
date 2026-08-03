@@ -41,7 +41,9 @@ bool mqttEnabled = true;
 char mqttServer[32]       = "192.168.99.225";
 uint16_t mqttPort         = 1883;
 char mqttUser[32]         = "huykaamaa";
-char mqttPass[32]         = "6O6jNJip66@";
+// Mac dinh RONG - khong hardcode mat khau that vao source (source nam trong git). Nhap 1 lan
+// qua Web UI, sau do no nam trong NVS va song qua cac lan nap firmware moi.
+char mqttPass[32]         = "";
 char mqttTopic[64]        = "giasach/vitri"; // moi vi tri se publish vao "<mqttTopic>/<1..6>"
 char mqttFullValue[32]    = "FULL";
 char mqttMissingValue[32] = "MISSING";
@@ -77,8 +79,23 @@ bool relayState[SENSOR_NUM]          = {false};
 bool relayOutput[SENSOR_NUM]         = {false};
 static bool relayReading[SENSOR_NUM] = {false};   // raw read gan nhat, dung de bat canh
 static unsigned long relayTimer[SENSOR_NUM] = {0};
-unsigned long relayTestUntil[SENSOR_NUM]    = {0};
 static bool lastSentState[SENSOR_NUM] = {false};  // trang thai (state && enable) da bao MQTT/OSC lan gan nhat
+
+// Nut Test tren web: ep relay ON tam thoi. relayTestUntil CHI co y nghia khi relayTestPending
+// = true. Truoc day chi co relayTestUntil voi sentinel 0 nghia la "khong test", nhung phep tru
+// chong tran (0 - millis()) lai ra so DUONG khi millis() > 2^31 (~24.9 ngay uptime) - moi relay
+// chua tung bam Test se bi ep ON suot 24.9 ngay ke tiep. Co pending tach bach "co moc hop le
+// khong" khoi "moc do da qua chua", nen khong con phu thuoc vao gia tri sentinel nao ca.
+static unsigned long relayTestUntil[SENSOR_NUM] = {0};
+static bool relayTestPending[SENSOR_NUM]        = {false};
+
+bool relayTestActive(int id) {
+  if (id < 0 || id >= SENSOR_NUM) return false;
+  if (!relayTestPending[id]) return false;
+  if ((long)(relayTestUntil[id] - millis()) > 0) return true;
+  relayTestPending[id] = false;  // het xung, don co lai
+  return false;
+}
 
 // ======================================================================
 // ETH EVENT
@@ -126,6 +143,7 @@ static void startDiagAp(bool isFallback) {
 void triggerRelayTest(int id) {
   if (id < 0 || id >= SENSOR_NUM) return;
   relayTestUntil[id] = millis() + RELAY_TEST_PULSE_MS;
+  relayTestPending[id] = true;
 }
 
 // ======================================================================
@@ -146,9 +164,7 @@ static void checkSensors() {
 
     // chi vi tri duoc tick (sensorEnable) moi thuc su kick relay; nut Test tren web
     // van ep ON tam thoi (2s) bat ke co tick hay khong, de kiem tra day dien.
-    // Dung dang tru (X - millis()) thay vi "millis() < X" de an toan qua vong lap millis()
-    // (overflow sau ~49.7 ngay) - giong cach tinh debounce/diag AP o tren.
-    bool testActive = ((long)(relayTestUntil[i] - millis()) > 0);
+    bool testActive = relayTestActive(i);
     relayOutput[i] = (relayState[i] && sensorEnable[i]) || testActive;
     digitalWrite(relayPins[i], relayOutput[i] ? RELAY_ON : RELAY_OFF);
 
@@ -166,8 +182,9 @@ static void checkSensors() {
 // Gui lai trang thai HIEN TAI (khong tinh test-pulse) cua ca 6 vi tri qua MQTT/OSC, dung
 // nguyen topic/dia chi/gia tri nhu binh thuong - khong phai message rieng biet, chi la
 // "nhac lai" cue gan nhat. Bu lai truong hop 1 lan doi trang thai bi rot mang (F31-style,
-// xem docs/todo tuong ung ben project can tim).
-static void sendHeartbeat() {
+// xem docs/todo tuong ung ben project can tim). Dung cho heartbeat dinh ky va cho buoc
+// ket thuc chuoi Test trong web.cpp.
+void resyncAllPositions() {
   for (int i = 0; i < SENSOR_NUM; i++) {
     triggerSensor(i, lastSentState[i]);
   }
@@ -203,7 +220,9 @@ void setup() {
   if (ethUseStaticFirst) {
     IPAddress ip, gw, mask;
     if (ip.fromString(ethStaticIp) && gw.fromString(ethStaticGateway) && mask.fromString(ethStaticNetmask)) {
-      if (ETH.config(ip, gw, mask)) {
+      // Truyen gateway lam DNS1: ETH.config() 3 tham so de DNS trong, nen neu MQTT broker
+      // duoc nhap bang hostname thay vi IP thi se khong resolve duoc o nhanh IP tinh.
+      if (ETH.config(ip, gw, mask, gw)) {
         eth_connected = true;
         usedFallback = true;
         LOG("ETH: dung IP tinh ngay tu dau (uu tien) - %s (gw %s, mask %s)", ethStaticIp, ethStaticGateway, ethStaticNetmask);
@@ -226,7 +245,7 @@ void setup() {
       LOG("ETH khong len IP sau %lu ms, ap dung static fallback de Web UI van truy cap duoc", ETH_WAIT_MS);
       IPAddress fallbackIp, fallbackGw, fallbackMask;
       if (fallbackIp.fromString(ethStaticIp) && fallbackGw.fromString(ethStaticGateway) && fallbackMask.fromString(ethStaticNetmask)) {
-        if (ETH.config(fallbackIp, fallbackGw, fallbackMask)) {
+        if (ETH.config(fallbackIp, fallbackGw, fallbackMask, fallbackGw)) { // gw lam DNS1, xem tren
           eth_connected = true;
           usedFallback = true;
           LOG("ETH: static fallback IP %s (gw %s, mask %s)", ethStaticIp, ethStaticGateway, ethStaticNetmask);
@@ -252,7 +271,7 @@ void setup() {
   server.on("/test_osc", HTTP_POST, handleTestOSC);
   server.on("/test_relay", HTTP_POST, handleTestRelay);
   server.begin();
-  oscUdp.begin(9000);
+  oscUdp.begin(OSC_LOCAL_PORT);
 
   mqttInit();
   LOG("HTTP Server Started");
@@ -270,12 +289,16 @@ void loop() {
     LOG("Diag AP: turned off");
   }
 
-  static unsigned long lastHeartbeatMs = 0;
-  if (heartbeatInterval > 0 && (millis() - lastHeartbeatMs) >= heartbeatInterval) {
-    lastHeartbeatMs = millis();
-    sendHeartbeat();
-  }
-
   updateTestSequence();
   checkSensors();
+
+  // Khoi tao bang millis() (chay dung 1 lan) chu khong phai 0: uptime luc vao loop() da ~12s
+  // (cho Serial + cho DHCP), nen voi chu ky heartbeat ngan (min 5s) moc 0 se lam nhip dau ban
+  // ngay o vong loop dau tien. Dat sau checkSensors() de lan gui dau tien chac chan da co
+  // trang thai sensor that, khong phai gia tri khoi tao toan FALSE (=TRONG).
+  static unsigned long lastHeartbeatMs = millis();
+  if (heartbeatInterval > 0 && (millis() - lastHeartbeatMs) >= heartbeatInterval) {
+    lastHeartbeatMs = millis();
+    resyncAllPositions();
+  }
 }

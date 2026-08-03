@@ -72,6 +72,19 @@ void mqttEvent(void *handler_args, esp_event_base_t base, int32_t event_id, void
 }
 
 void mqttInit() {
+  mqttConnected = false;
+
+  // Bo tick "Enable MQTT" = khong dung client len chut nao, thay vi de client cu ket noi/
+  // reconnect nen chi chan moi cho publish.
+  if (!mqttEnabled) {
+    LOG("MQTT disabled - khong khoi tao client");
+    return;
+  }
+  if (strlen(mqttServer) == 0) {
+    LOG("MQTT: dia chi broker rong - khong khoi tao client");
+    return;
+  }
+
   static char uriBuf[96];
   snprintf(uriBuf, sizeof(uriBuf), "mqtt://%s:%u", mqttServer, mqttPort);
 
@@ -82,15 +95,18 @@ void mqttInit() {
   static char client_id[] = "GIA_SACH";
   config.credentials.client_id = client_id;
 
-  if (strlen(mqttUser) > 0) config.credentials.username = mqttUser;
-  if (strlen(mqttPass) > 0) config.credentials.authentication.password = mqttPass;
+  // Chi gui credentials khi co username. Password khong xoa duoc tu web (o Pass de trong =
+  // giu nguyen), nen xoa trang o User la cach de chuyen han sang ket noi anonymous.
+  if (strlen(mqttUser) > 0) {
+    config.credentials.username = mqttUser;
+    if (strlen(mqttPass) > 0) config.credentials.authentication.password = mqttPass;
+  }
 
   mqtt = esp_mqtt_client_init(&config);
   if (mqtt) {
     esp_mqtt_client_register_event(mqtt, MQTT_EVENT_ANY, mqttEvent, NULL);
     esp_mqtt_client_start(mqtt);
   } else {
-    mqttConnected = false;
     LOG("MQTT init failed");
   }
 }

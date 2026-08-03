@@ -21,21 +21,53 @@ static bool parseValidatedLong(const String &s, long minVal, long maxVal, long &
   return true;
 }
 
+// Copy 1 arg dang chuoi vao buffer co dinh, BO QUA neu arg de trong (de trong = giu nguyen gia
+// tri cu). Ap dung cho cac truong ma chuoi rong se lam hong chuc nang - vd mqtt_ip rong sinh ra
+// URI "mqtt://:1883" khien esp_mqtt_client_init() that bai va MQTT chet han cho toi khi sua lai.
+static bool saveStringArg(const char *argName, char *dest, size_t destSize) {
+  if (!server.hasArg(argName)) return false;
+  String v = server.arg(argName);
+  if (v.length() == 0) return false;
+  strncpy(dest, v.c_str(), destSize - 1);
+  dest[destSize - 1] = '\0';
+  return true;
+}
+
+// Nhu tren nhung bat buoc parse duoc thanh IPv4. Nhap sai IP/gateway/netmask o day co the lam
+// mat luon duong vao Web UI o lan boot sau (neu DHCP cung khong len), nen phai chan tai cho va
+// bao len UI thay vi luu am tham.
+static bool saveIpArg(const char *argName, char *dest, size_t destSize, bool &invalidFlag) {
+  if (!server.hasArg(argName)) return false;
+  String v = server.arg(argName);
+  if (v.length() == 0) return false;  // de trong = giu nguyen, khong phai loi
+  IPAddress parsed;
+  if (!parsed.fromString(v)) {
+    invalidFlag = true;
+    return false;
+  }
+  strncpy(dest, v.c_str(), destSize - 1);
+  dest[destSize - 1] = '\0';
+  return true;
+}
+
 void handleData() {
   String data;
   data += "<b>MQTT:</b> ";
-  data += mqttConnected ? "<span style='color:green'>CONNECTED</span>" : "<span style='color:red'>DISCONNECTED</span>";
+  if (!mqttEnabled) data += "<span style='color:gray'>DISABLED</span>";
+  else data += mqttConnected ? "<span style='color:green'>CONNECTED</span>" : "<span style='color:red'>DISCONNECTED</span>";
   data += "<br><b>OSC:</b> ";
   data += oscEnabled ? "<span style='color:green'>ENABLED</span>" : "<span style='color:gray'>DISABLED</span>";
   data += "<br><br>";
 
   for (int i = 0; i < SENSOR_NUM; i++) {
-    bool active = (digitalRead(sensorPins[i]) == SENSOR_ACTIVE);
+    // Hien trang thai DA DEBOUNCE (relayState) chu khong phai digitalRead() thoi diem request:
+    // gia tri tho nhay nhanh hon relay/MQTT nen dashboard hay mau thuan voi chinh cot relay
+    // ngay ben canh.
     data += "Vị trí " + String(i + 1) + " : ";
-    data += active ? "<span style='color:green;font-weight:bold'>CÓ SÁCH</span>" : "<span style='color:red;font-weight:bold'>TRỐNG</span>";
+    data += relayState[i] ? "<span style='color:green;font-weight:bold'>CÓ SÁCH</span>" : "<span style='color:red;font-weight:bold'>TRỐNG</span>";
     data += " | relay ";
     data += relayOutput[i] ? "<b style='color:green'>ON</b>" : "OFF";
-    data += ((long)(relayTestUntil[i] - millis()) > 0) ? " (testing)" : "";
+    data += relayTestActive(i) ? " (testing)" : "";
     data += "<br>";
   }
 
@@ -47,11 +79,7 @@ void handleSave() {
 
   bool needRestartMQTT = false;
 
-  if (server.hasArg("mqtt_ip")) {
-    strncpy(mqttServer, server.arg("mqtt_ip").c_str(), sizeof(mqttServer) - 1);
-    mqttServer[sizeof(mqttServer) - 1] = '\0';
-    needRestartMQTT = true;
-  }
+  if (saveStringArg("mqtt_ip", mqttServer, sizeof(mqttServer))) needRestartMQTT = true;
 
   bool mqttPortInvalid = false;
   if (server.hasArg("mqtt_port")) {
@@ -64,39 +92,31 @@ void handleSave() {
     }
   }
 
+  // mqtt_user CO the de rong (broker anonymous) nen khong dung saveStringArg() o day - xoa
+  // trang o nay la cach duy nhat de bo credentials, vi o Pass khong con doc lai duoc.
   if (server.hasArg("mqtt_user")) {
     strncpy(mqttUser, server.arg("mqtt_user").c_str(), sizeof(mqttUser) - 1);
     mqttUser[sizeof(mqttUser) - 1] = '\0';
     needRestartMQTT = true;
   }
 
+  // Bat/tat MQTT phai restart client: truoc day chi chan publish, client van ket noi va
+  // dashboard van bao CONNECTED du da bo tick Enable.
+  bool prevMqttEnabled = mqttEnabled;
   mqttEnabled = server.hasArg("mqtt_enable");
+  if (mqttEnabled != prevMqttEnabled) needRestartMQTT = true;
 
-  if (server.hasArg("mqtt_pass")) {
-    strncpy(mqttPass, server.arg("mqtt_pass").c_str(), sizeof(mqttPass) - 1);
-    mqttPass[sizeof(mqttPass) - 1] = '\0';
-    needRestartMQTT = true;
-  }
+  // Form khong do password that ra HTML nua (tranh lo qua "/" von khong can dang nhap), nen
+  // o day de trong = giu nguyen password cu - giong auth_pass.
+  if (saveStringArg("mqtt_pass", mqttPass, sizeof(mqttPass))) needRestartMQTT = true;
 
-  if (server.hasArg("mqtt_topic")) {
-    strncpy(mqttTopic, server.arg("mqtt_topic").c_str(), sizeof(mqttTopic) - 1);
-    mqttTopic[sizeof(mqttTopic) - 1] = '\0';
-  }
-  if (server.hasArg("mqtt_full")) {
-    strncpy(mqttFullValue, server.arg("mqtt_full").c_str(), sizeof(mqttFullValue) - 1);
-    mqttFullValue[sizeof(mqttFullValue) - 1] = '\0';
-  }
-  if (server.hasArg("mqtt_missing")) {
-    strncpy(mqttMissingValue, server.arg("mqtt_missing").c_str(), sizeof(mqttMissingValue) - 1);
-    mqttMissingValue[sizeof(mqttMissingValue) - 1] = '\0';
-  }
+  saveStringArg("mqtt_topic", mqttTopic, sizeof(mqttTopic));
+  saveStringArg("mqtt_full", mqttFullValue, sizeof(mqttFullValue));
+  saveStringArg("mqtt_missing", mqttMissingValue, sizeof(mqttMissingValue));
 
   oscEnabled = server.hasArg("osc_enable");
 
-  if (server.hasArg("osc_ip")) {
-    strncpy(oscIp, server.arg("osc_ip").c_str(), sizeof(oscIp) - 1);
-    oscIp[sizeof(oscIp) - 1] = '\0';
-  }
+  saveStringArg("osc_ip", oscIp, sizeof(oscIp));
 
   bool oscPortInvalid = false;
   if (server.hasArg("osc_port")) {
@@ -150,27 +170,13 @@ void handleSave() {
 
   ethUseStaticFirst = server.hasArg("eth_static_first");
 
-  if (server.hasArg("eth_ip")) {
-    strncpy(ethStaticIp, server.arg("eth_ip").c_str(), sizeof(ethStaticIp) - 1);
-    ethStaticIp[sizeof(ethStaticIp) - 1] = '\0';
-  }
-  if (server.hasArg("eth_gw")) {
-    strncpy(ethStaticGateway, server.arg("eth_gw").c_str(), sizeof(ethStaticGateway) - 1);
-    ethStaticGateway[sizeof(ethStaticGateway) - 1] = '\0';
-  }
-  if (server.hasArg("eth_mask")) {
-    strncpy(ethStaticNetmask, server.arg("eth_mask").c_str(), sizeof(ethStaticNetmask) - 1);
-    ethStaticNetmask[sizeof(ethStaticNetmask) - 1] = '\0';
-  }
+  bool ethAddrInvalid = false;
+  saveIpArg("eth_ip", ethStaticIp, sizeof(ethStaticIp), ethAddrInvalid);
+  saveIpArg("eth_gw", ethStaticGateway, sizeof(ethStaticGateway), ethAddrInvalid);
+  saveIpArg("eth_mask", ethStaticNetmask, sizeof(ethStaticNetmask), ethAddrInvalid);
 
-  if (server.hasArg("auth_user") && server.arg("auth_user").length() > 0) {
-    strncpy(authUser, server.arg("auth_user").c_str(), sizeof(authUser) - 1);
-    authUser[sizeof(authUser) - 1] = '\0';
-  }
-  if (server.hasArg("auth_pass") && server.arg("auth_pass").length() > 0) {
-    strncpy(authPass, server.arg("auth_pass").c_str(), sizeof(authPass) - 1);
-    authPass[sizeof(authPass) - 1] = '\0';
-  }
+  saveStringArg("auth_user", authUser, sizeof(authUser));
+  saveStringArg("auth_pass", authPass, sizeof(authPass));
 
   for (int i = 0; i < SENSOR_NUM; i++) {
     sensorEnable[i] = server.hasArg("en" + String(i));
@@ -196,6 +202,7 @@ void handleSave() {
   if (oscAddressInvalid) alertMsg += " (OSC address rejected: must start with /)";
   if (mqttPortInvalid) alertMsg += " (MQTT port rejected: must be 1-65535)";
   if (oscPortInvalid) alertMsg += " (OSC port rejected: must be 1-65535)";
+  if (ethAddrInvalid) alertMsg += " (ETH IP/gateway/netmask rejected: not a valid IPv4 address)";
 
   server.send(200, "text/html", "<script>alert('" + alertMsg + "');window.location.href='/';</script>");
 }
@@ -219,16 +226,22 @@ void updateTestSequence() {
   if (!testSeqActive) return;
   if ((long)(testSeqNextMs - millis()) > 0) return; // an toan qua vong lap millis()
 
+  // Buoc phu cuoi cung: tra ben nhan ve trang thai THAT. Chuoi Test goi thang triggerSensor()
+  // nen khong dung vao lastSentState[] - sau buoc "1..6 OFF" ben nhan tin ca 6 vi tri deu
+  // TRONG, con thiet bi van nghi minh da gui trang thai cu nen se KHONG tu gui lai. Neu khong
+  // resync o day thi lech keo dai toi lan doi trang thai vat ly ke tiep (heartbeat co the dang
+  // tat = 0).
+  if (testSeqIndex >= TEST_SEQ_TOTAL_STEPS) {
+    resyncAllPositions();
+    testSeqActive = false;
+    return;
+  }
+
   int pos = testSeqIndex % SENSOR_NUM;      // 0..5, lap lai o nua sau
   bool state = testSeqIndex < SENSOR_NUM;   // nua dau: ON (CO), nua sau: OFF (TRONG)
   triggerSensor(pos, state);
   testSeqIndex++;
-
-  if (testSeqIndex >= TEST_SEQ_TOTAL_STEPS) {
-    testSeqActive = false;
-  } else {
-    testSeqNextMs = millis() + TEST_SEQ_INTERVAL_MS;
-  }
+  testSeqNextMs = millis() + TEST_SEQ_INTERVAL_MS;
 }
 
 void handleTestMQTT() {
