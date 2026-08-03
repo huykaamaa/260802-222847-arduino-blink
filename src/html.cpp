@@ -63,21 +63,22 @@ void handleRoot() {
   html += "<h2>GIÁ SÁCH</h2>";
   html += "<div id='d'>Loading...</div>";
 
-  // Form rieng cho tung nut Test relay, dat ngoai #mainForm de khong long form trong form.
-  html += "<form id='testForm' action='/test_relay' method='POST'></form>";
+  // Form rieng cho nut Test relay, dat ngoai #mainForm de khong long form trong form.
+  html += "<form id='testRelayForm' action='/test_relay' method='POST'></form>";
   html += "<form id='mainForm' action='/save' method='POST'>";
 
   html += "<div class='panel'>";
   html += "<h3>Sensor / Relay</h3>";
-  for (int i = 0; i < SENSOR_NUM; i++) {
-    html += "<div class='sensor'>";
-    html += "<div class='row'>";
-    html += "<label style='flex:2;margin:0;min-width:160px'><input type='checkbox' name='en" + String(i) + "' " + (sensorEnable[i] ? "checked" : "") + "> Vị trí " + String(i + 1) + "</label>";
-    html += "<button class='btn btn-test' type='submit' form='testForm' name='id' value='" + String(i) + "'>Test</button>";
-    html += "</div>";
-    html += "</div>";
+  html += "<div class='note'>2 sensor độc lập (vị trí 1, 2). Cả 2 có sách → relay 1 ON, relay 2 OFF. Lấy 1 cuốn (1 trong 2 sensor trống) → relay 1 OFF, relay 2 ON. Lấy cả 2 cuốn → relay 1 OFF, relay 2 tiếp tục ON.</div>";
+  html += "<button class='btn btn-test' style='width:100%;margin-top:10px' type='submit' form='testRelayForm'>Test Relay (đảo cả 2 relay ~2 giây)</button>";
+  html += "</div>";
+
+  html += "<div class='panel'>";
+  html += "<h3>Relay backup</h3>";
+  html += "<div class='note'>Máy có sẵn 6 relay vật lý, chia thành 3 cặp. Cặp được tick sẽ nhận cùng tín hiệu relay 1/relay 2 tính từ trạng thái sách; cặp không tick luôn OFF. Tick nhiều cặp cùng lúc để chạy song song dự phòng; nếu 1 relay hỏng, bỏ tick cặp đó và tick cặp còn tốt, không cần nạp lại firmware.</div>";
+  for (int p = 0; p < RELAY_PAIR_NUM; p++) {
+    html += "<div class='single'><label><input type='checkbox' name='relay_pair" + String(p) + "' " + (relayPairEnable[p] ? "checked" : "") + "> Cặp " + String(p + 1) + " (relay " + String(2 * p + 1) + " = GPIO" + String(relayPins[2 * p]) + ", relay " + String(2 * p + 2) + " = GPIO" + String(relayPins[2 * p + 1]) + ")</label></div>";
   }
-  html += "<div class='note'>Chỉ vị trí được tick mới kích relay và gửi MQTT/OSC. Nút Test bật thử relay ~2 giây bất kể có tick hay không.</div>";
   html += "</div>";
 
   html += "<div class='panel'>";
@@ -90,10 +91,19 @@ void handleRoot() {
   // duoc), nen "value=" o day dong nghia voi ai xem duoc trang cung doc duoc mat khau broker
   // bang View Source. De trong = giu nguyen, giong o cach auth_pass ben duoi.
   html += "<div class='single'><label>Pass</label><input type='password' name='mqtt_pass' placeholder='(giữ nguyên nếu để trống)'></div>";
-  html += "<div class='single'><label>Topic gốc</label><input name='mqtt_topic' value='" + htmlEscape(mqttTopic) + "'></div>";
-  html += "<div class='single'><label>Giá trị khi CÓ</label><input name='mqtt_full' value='" + htmlEscape(mqttFullValue) + "'></div>";
-  html += "<div class='single'><label>Giá trị khi TRỐNG</label><input name='mqtt_missing' value='" + htmlEscape(mqttMissingValue) + "'></div>";
-  html += "<div class='note'>Mỗi vị trí tự publish vào &lt;topic gốc&gt;/&lt;1..6&gt;, payload chỉ là giá trị. Ví dụ topic gốc '" + htmlEscape(mqttTopic) + "' → vị trí 3 publish vào '" + htmlEscape(mqttTopic) + "/3'. Ô Pass để trống nghĩa là giữ nguyên mật khẩu đang dùng (mật khẩu không được hiển thị lại ở đây).</div>";
+  html += "<div class='row'>";
+  html += "<div class='field'><label>Topic - Trạng thái 1 (đủ sách)</label><input name='mqtt_topic_full' value='" + htmlEscape(mqttTopicFull) + "'></div>";
+  html += "<div class='field'><label>Giá trị</label><input name='mqtt_val_full' value='" + htmlEscape(mqttValueFull) + "'></div>";
+  html += "</div>";
+  html += "<div class='row'>";
+  html += "<div class='field'><label>Topic - Trạng thái 2 (lấy 1 cuốn)</label><input name='mqtt_topic_one' value='" + htmlEscape(mqttTopicOneTaken) + "'></div>";
+  html += "<div class='field'><label>Giá trị</label><input name='mqtt_val_one' value='" + htmlEscape(mqttValueOneTaken) + "'></div>";
+  html += "</div>";
+  html += "<div class='row'>";
+  html += "<div class='field'><label>Topic - Trạng thái 3 (lấy 2 cuốn)</label><input name='mqtt_topic_two' value='" + htmlEscape(mqttTopicTwoTaken) + "'></div>";
+  html += "<div class='field'><label>Giá trị</label><input name='mqtt_val_two' value='" + htmlEscape(mqttValueTwoTaken) + "'></div>";
+  html += "</div>";
+  html += "<div class='note'>Mỗi trạng thái publish 1 lần (khi vừa chuyển vào) vào đúng topic riêng của nó, payload là giá trị tương ứng. Ô Pass để trống nghĩa là giữ nguyên mật khẩu đang dùng (mật khẩu không được hiển thị lại ở đây).</div>";
   html += "</div>";
 
   html += "<div class='panel'>";
@@ -101,23 +111,31 @@ void handleRoot() {
   html += "<div class='single'><label><input type='checkbox' name='osc_enable' " + String(oscEnabled ? "checked" : "") + "> Enable OSC</label></div>";
   html += "<div class='single'><label>IP</label><input name='osc_ip' value='" + htmlEscape(oscIp) + "'></div>";
   html += "<div class='single'><label>Port</label><input name='osc_port' value='" + String(oscPort) + "'></div>";
-  html += "<div class='single'><label>Địa chỉ khi CÓ</label><input name='osc_address_full' value='" + htmlEscape(oscAddressFull) + "' placeholder='.../clips/{id}/connect'></div>";
-  html += "<div class='single'><label>Giá trị khi CÓ</label><input name='osc_value_full' value='" + String(oscValueFull) + "'></div>";
-  html += "<div class='single'><label>Địa chỉ khi TRỐNG</label><input name='osc_address_missing' value='" + htmlEscape(oscAddressMissing) + "' placeholder='.../clips/{id}/disconnect'></div>";
-  html += "<div class='single'><label>Giá trị khi TRỐNG</label><input name='osc_value_missing' value='" + String(oscValueMissing) + "'></div>";
-  html += "<div class='note'>Viết {id} ở chỗ cần chèn số vị trí (1..6). CÓ và TRỐNG là 2 message OSC độc lập, mỗi cái 1 địa chỉ + 1 giá trị riêng.</div>";
+  html += "<div class='row'>";
+  html += "<div class='field'><label>Địa chỉ - Trạng thái 1 (đủ sách)</label><input name='osc_address_full' value='" + htmlEscape(oscAddressFull) + "'></div>";
+  html += "<div class='field'><label>Giá trị</label><input name='osc_value_full' value='" + String(oscValueFull) + "'></div>";
+  html += "</div>";
+  html += "<div class='row'>";
+  html += "<div class='field'><label>Địa chỉ - Trạng thái 2 (lấy 1 cuốn)</label><input name='osc_address_one' value='" + htmlEscape(oscAddressOneTaken) + "'></div>";
+  html += "<div class='field'><label>Giá trị</label><input name='osc_value_one' value='" + String(oscValueOneTaken) + "'></div>";
+  html += "</div>";
+  html += "<div class='row'>";
+  html += "<div class='field'><label>Địa chỉ - Trạng thái 3 (lấy 2 cuốn)</label><input name='osc_address_two' value='" + htmlEscape(oscAddressTwoTaken) + "'></div>";
+  html += "<div class='field'><label>Giá trị</label><input name='osc_value_two' value='" + String(oscValueTwoTaken) + "'></div>";
+  html += "</div>";
+  html += "<div class='note'>3 trạng thái là 3 message OSC độc lập, mỗi cái 1 địa chỉ + 1 giá trị riêng, bắn 1 lần khi vừa chuyển vào trạng thái đó.</div>";
   html += "</div>";
 
   html += "<div class='panel'>";
   html += "<h3>Debounce</h3>";
   html += "<div class='single'><label>Debounce (ms)</label><input name='debounce' value='" + String(debounceTime) + "'></div>";
-  html += "<div class='note'>Dùng chung cho cả 6 vị trí, mỗi vị trí tự tính debounce riêng theo giá trị này.</div>";
+  html += "<div class='note'>Dùng chung cho cả 2 sensor, mỗi sensor tự tính debounce riêng theo giá trị này.</div>";
   html += "</div>";
 
   html += "<div class='panel'>";
   html += "<h3>Heartbeat (gửi lại trạng thái định kỳ)</h3>";
   html += "<div class='single'><label>Chu kỳ (ms, 0 = tắt)</label><input name='heartbeat' value='" + String(heartbeatInterval) + "'></div>";
-  html += "<div class='note'>MQTT (QoS0) và OSC (UDP) đều không đảm bảo gửi tới nơi - nếu đúng lúc đổi trạng thái mà mạng chập chờn, bên nhận có thể bị lệch cho tới lần đổi kế tiếp. Heartbeat gửi lại trạng thái hiện tại của cả 6 vị trí theo chu kỳ này để tự đồng bộ lại.</div>";
+  html += "<div class='note'>MQTT (QoS0) và OSC (UDP) đều không đảm bảo gửi tới nơi - nếu đúng lúc đổi trạng thái mà mạng chập chờn, bên nhận có thể bị lệch cho tới lần đổi kế tiếp. Heartbeat gửi lại trạng thái sách hiện tại theo chu kỳ này để tự đồng bộ lại.</div>";
   html += "</div>";
 
   html += "<div class='panel'>";
@@ -141,8 +159,8 @@ void handleRoot() {
 
   html += "<div class='panel'>";
   html += "<h3>Test Settings</h3>";
-  html += "<form action='/test_mqtt' method='POST' style='margin-bottom:10px;'><input class='btn' type='submit' value='Test MQTT (1→6 ON, 1→6 OFF)'></form>";
-  html += "<form action='/test_osc' method='POST'><input class='btn' type='submit' value='Test OSC (1→6 ON, 1→6 OFF)'></form>";
+  html += "<form action='/test_mqtt' method='POST' style='margin-bottom:10px;'><input class='btn' type='submit' value='Test MQTT (trạng thái 1→2→3)'></form>";
+  html += "<form action='/test_osc' method='POST'><input class='btn' type='submit' value='Test OSC (trạng thái 1→2→3)'></form>";
   html += "</div>";
 
   html += "</div></body></html>";

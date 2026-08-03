@@ -50,6 +50,15 @@ static bool saveIpArg(const char *argName, char *dest, size_t destSize, bool &in
   return true;
 }
 
+static const char* bookStateLabel(int state) {
+  switch (state) {
+    case BOOK_STATE_FULL:      return "<span style='color:green;font-weight:bold'>ĐỦ SÁCH</span>";
+    case BOOK_STATE_ONE_TAKEN: return "<span style='color:orange;font-weight:bold'>ĐÃ LẤY 1 CUỐN</span>";
+    case BOOK_STATE_TWO_TAKEN: return "<span style='color:red;font-weight:bold'>ĐÃ LẤY 2 CUỐN</span>";
+    default:                   return "<span style='color:gray'>...</span>";
+  }
+}
+
 void handleData() {
   String data;
   data += "<b>MQTT:</b> ";
@@ -59,15 +68,25 @@ void handleData() {
   data += oscEnabled ? "<span style='color:green'>ENABLED</span>" : "<span style='color:gray'>DISABLED</span>";
   data += "<br><br>";
 
+  data += "<b>Trạng thái:</b> ";
+  data += bookStateLabel(bookState);
+  data += "<br><br>";
+
   for (int i = 0; i < SENSOR_NUM; i++) {
-    // Hien trang thai DA DEBOUNCE (relayState) chu khong phai digitalRead() thoi diem request:
-    // gia tri tho nhay nhanh hon relay/MQTT nen dashboard hay mau thuan voi chinh cot relay
-    // ngay ben canh.
-    data += "Vị trí " + String(i + 1) + " : ";
-    data += relayState[i] ? "<span style='color:green;font-weight:bold'>CÓ SÁCH</span>" : "<span style='color:red;font-weight:bold'>TRỐNG</span>";
-    data += " | relay ";
-    data += relayOutput[i] ? "<b style='color:green'>ON</b>" : "OFF";
-    data += relayTestActive(i) ? " (testing)" : "";
+    // Hien trang thai DA DEBOUNCE (sensorState) chu khong phai digitalRead() thoi diem
+    // request: gia tri tho nhay nhanh hon relay/MQTT nen dashboard hay mau thuan.
+    data += "Sensor " + String(i + 1) + " : ";
+    data += sensorState[i] ? "<span style='color:green;font-weight:bold'>CÓ SÁCH</span>" : "<span style='color:red;font-weight:bold'>TRỐNG</span>";
+    data += "<br>";
+  }
+  bool testing = relayTestActive();
+  for (int p = 0; p < RELAY_PAIR_NUM; p++) {
+    data += "Cặp " + String(p + 1) + (relayPairEnable[p] ? " (đang bật)" : " (tắt)") + " - Relay " + String(2 * p + 1) + " : ";
+    data += relayOutput[2 * p] ? "<b style='color:green'>ON</b>" : "OFF";
+    data += testing && relayPairEnable[p] ? " (testing)" : "";
+    data += " | Relay " + String(2 * p + 2) + " : ";
+    data += relayOutput[2 * p + 1] ? "<b style='color:green'>ON</b>" : "OFF";
+    data += testing && relayPairEnable[p] ? " (testing)" : "";
     data += "<br>";
   }
 
@@ -110,9 +129,12 @@ void handleSave() {
   // o day de trong = giu nguyen password cu - giong auth_pass.
   if (saveStringArg("mqtt_pass", mqttPass, sizeof(mqttPass))) needRestartMQTT = true;
 
-  saveStringArg("mqtt_topic", mqttTopic, sizeof(mqttTopic));
-  saveStringArg("mqtt_full", mqttFullValue, sizeof(mqttFullValue));
-  saveStringArg("mqtt_missing", mqttMissingValue, sizeof(mqttMissingValue));
+  saveStringArg("mqtt_topic_full", mqttTopicFull, sizeof(mqttTopicFull));
+  saveStringArg("mqtt_val_full", mqttValueFull, sizeof(mqttValueFull));
+  saveStringArg("mqtt_topic_one", mqttTopicOneTaken, sizeof(mqttTopicOneTaken));
+  saveStringArg("mqtt_val_one", mqttValueOneTaken, sizeof(mqttValueOneTaken));
+  saveStringArg("mqtt_topic_two", mqttTopicTwoTaken, sizeof(mqttTopicTwoTaken));
+  saveStringArg("mqtt_val_two", mqttValueTwoTaken, sizeof(mqttValueTwoTaken));
 
   oscEnabled = server.hasArg("osc_enable");
 
@@ -132,27 +154,23 @@ void handleSave() {
   // ma khong co canh bao. De trong = giu nguyen gia tri cu (giong auth_user/auth_pass),
   // khong cho phep xoa trang thanh rong.
   bool oscAddressInvalid = false;
-  if (server.hasArg("osc_address_full") && server.arg("osc_address_full").length() > 0) {
-    String v = server.arg("osc_address_full");
+  auto saveOscAddress = [&](const char *argName, char *dest, size_t destSize) {
+    if (!server.hasArg(argName) || server.arg(argName).length() == 0) return;
+    String v = server.arg(argName);
     if (v[0] != '/') {
       oscAddressInvalid = true;
-    } else {
-      strncpy(oscAddressFull, v.c_str(), sizeof(oscAddressFull) - 1);
-      oscAddressFull[sizeof(oscAddressFull) - 1] = '\0';
+      return;
     }
-  }
-  if (server.hasArg("osc_address_missing") && server.arg("osc_address_missing").length() > 0) {
-    String v = server.arg("osc_address_missing");
-    if (v[0] != '/') {
-      oscAddressInvalid = true;
-    } else {
-      strncpy(oscAddressMissing, v.c_str(), sizeof(oscAddressMissing) - 1);
-      oscAddressMissing[sizeof(oscAddressMissing) - 1] = '\0';
-    }
-  }
+    strncpy(dest, v.c_str(), destSize - 1);
+    dest[destSize - 1] = '\0';
+  };
+  saveOscAddress("osc_address_full", oscAddressFull, sizeof(oscAddressFull));
+  saveOscAddress("osc_address_one", oscAddressOneTaken, sizeof(oscAddressOneTaken));
+  saveOscAddress("osc_address_two", oscAddressTwoTaken, sizeof(oscAddressTwoTaken));
 
   if (server.hasArg("osc_value_full")) oscValueFull = server.arg("osc_value_full").toInt();
-  if (server.hasArg("osc_value_missing")) oscValueMissing = server.arg("osc_value_missing").toInt();
+  if (server.hasArg("osc_value_one")) oscValueOneTaken = server.arg("osc_value_one").toInt();
+  if (server.hasArg("osc_value_two")) oscValueTwoTaken = server.arg("osc_value_two").toInt();
 
   if (server.hasArg("debounce")) {
     long v = server.arg("debounce").toInt();
@@ -178,8 +196,8 @@ void handleSave() {
   saveStringArg("auth_user", authUser, sizeof(authUser));
   saveStringArg("auth_pass", authPass, sizeof(authPass));
 
-  for (int i = 0; i < SENSOR_NUM; i++) {
-    sensorEnable[i] = server.hasArg("en" + String(i));
+  for (int p = 0; p < RELAY_PAIR_NUM; p++) {
+    relayPairEnable[p] = server.hasArg("relay_pair" + String(p));
   }
 
   int saveFailCount = saveConfig();
@@ -207,10 +225,10 @@ void handleSave() {
   server.send(200, "text/html", "<script>alert('" + alertMsg + "');window.location.href='/';</script>");
 }
 
-// Test MQTT/OSC: ban lan luot vi tri 1..6 ON (CO) truoc, roi 1..6 OFF (TRONG), cach nhau
-// 1s/buoc - tong 12 buoc. Dung millis(), KHONG dung delay(), de khong block loop().
+// Test MQTT/OSC: ban lan luot ca 3 trang thai (FULL -> ONE_TAKEN -> TWO_TAKEN), cach nhau
+// 1s/buoc. Dung millis(), KHONG dung delay(), de khong block loop().
 #define TEST_SEQ_INTERVAL_MS 1000UL
-#define TEST_SEQ_TOTAL_STEPS (SENSOR_NUM * 2)
+#define TEST_SEQ_TOTAL_STEPS 3
 
 static bool testSeqActive = false;
 static int testSeqIndex = 0;
@@ -226,20 +244,18 @@ void updateTestSequence() {
   if (!testSeqActive) return;
   if ((long)(testSeqNextMs - millis()) > 0) return; // an toan qua vong lap millis()
 
-  // Buoc phu cuoi cung: tra ben nhan ve trang thai THAT. Chuoi Test goi thang triggerSensor()
-  // nen khong dung vao lastSentState[] - sau buoc "1..6 OFF" ben nhan tin ca 6 vi tri deu
-  // TRONG, con thiet bi van nghi minh da gui trang thai cu nen se KHONG tu gui lai. Neu khong
-  // resync o day thi lech keo dai toi lan doi trang thai vat ly ke tiep (heartbeat co the dang
-  // tat = 0).
+  // Buoc phu cuoi cung: tra ben nhan ve trang thai sach THAT. Chuoi Test goi thang
+  // triggerBookState() nen khong dung bookState - sau buoc cuoi ben nhan tin trang thai la
+  // TWO_TAKEN, con thiet bi van nghi minh da gui trang thai cu nen se KHONG tu gui lai. Neu
+  // khong resync o day thi lech keo dai toi lan doi trang thai vat ly ke tiep (heartbeat co
+  // the dang tat = 0).
   if (testSeqIndex >= TEST_SEQ_TOTAL_STEPS) {
-    resyncAllPositions();
+    resyncBookState();
     testSeqActive = false;
     return;
   }
 
-  int pos = testSeqIndex % SENSOR_NUM;      // 0..5, lap lai o nua sau
-  bool state = testSeqIndex < SENSOR_NUM;   // nua dau: ON (CO), nua sau: OFF (TRONG)
-  triggerSensor(pos, state);
+  triggerBookState(testSeqIndex + 1); // 1=FULL, 2=ONE_TAKEN, 3=TWO_TAKEN
   testSeqIndex++;
   testSeqNextMs = millis() + TEST_SEQ_INTERVAL_MS;
 }
@@ -258,10 +274,7 @@ void handleTestOSC() {
 
 void handleTestRelay() {
   if (!requireAuth()) return;
-  if (server.hasArg("id")) {
-    int id = server.arg("id").toInt();
-    triggerRelayTest(id);
-  }
+  triggerRelayTest();
   server.send(200, "text/html", "<script>window.location.href='/';</script>");
 }
 
@@ -278,17 +291,22 @@ int saveConfig() {
   if (!prefs.putBool(NVS_KEY("mqtt_en"), mqttEnabled)) fails++;
   if (!prefs.putString(NVS_KEY("mqtt_user"), mqttUser)) fails++;
   if (!prefs.putString(NVS_KEY("mqtt_pass"), mqttPass)) fails++;
-  if (!prefs.putString(NVS_KEY("mqtt_topic"), mqttTopic)) fails++;
-  if (!prefs.putString(NVS_KEY("mqtt_full"), mqttFullValue)) fails++;
-  if (!prefs.putString(NVS_KEY("mqtt_missing"), mqttMissingValue)) fails++;
+  if (!prefs.putString(NVS_KEY("mqtt_topic_full"), mqttTopicFull)) fails++;
+  if (!prefs.putString(NVS_KEY("mqtt_val_full"), mqttValueFull)) fails++;
+  if (!prefs.putString(NVS_KEY("mqtt_topic_one"), mqttTopicOneTaken)) fails++;
+  if (!prefs.putString(NVS_KEY("mqtt_val_one"), mqttValueOneTaken)) fails++;
+  if (!prefs.putString(NVS_KEY("mqtt_topic_two"), mqttTopicTwoTaken)) fails++;
+  if (!prefs.putString(NVS_KEY("mqtt_val_two"), mqttValueTwoTaken)) fails++;
 
   if (!prefs.putBool(NVS_KEY("osc_en"), oscEnabled)) fails++;
   if (!prefs.putString(NVS_KEY("osc_ip"), oscIp)) fails++;
   if (!prefs.putUShort(NVS_KEY("osc_port"), oscPort)) fails++;
   if (!prefs.putString(NVS_KEY("osc_addr_full"), oscAddressFull)) fails++;
-  if (!prefs.putString(NVS_KEY("osc_addr_miss"), oscAddressMissing)) fails++;
   if (!prefs.putInt(NVS_KEY("osc_val_full"), oscValueFull)) fails++;
-  if (!prefs.putInt(NVS_KEY("osc_val_miss"), oscValueMissing)) fails++;
+  if (!prefs.putString(NVS_KEY("osc_addr_one"), oscAddressOneTaken)) fails++;
+  if (!prefs.putInt(NVS_KEY("osc_val_one"), oscValueOneTaken)) fails++;
+  if (!prefs.putString(NVS_KEY("osc_addr_two"), oscAddressTwoTaken)) fails++;
+  if (!prefs.putInt(NVS_KEY("osc_val_two"), oscValueTwoTaken)) fails++;
 
   if (!prefs.putULong(NVS_KEY("debounce"), debounceTime)) fails++;
   if (!prefs.putULong(NVS_KEY("heartbeat"), heartbeatInterval)) fails++;
@@ -301,8 +319,8 @@ int saveConfig() {
   if (!prefs.putString(NVS_KEY("auth_user"), authUser)) fails++;
   if (!prefs.putString(NVS_KEY("auth_pass"), authPass)) fails++;
 
-  for (int i = 0; i < SENSOR_NUM; i++) {
-    if (!prefs.putBool(("en" + String(i)).c_str(), sensorEnable[i])) fails++;
+  for (int p = 0; p < RELAY_PAIR_NUM; p++) {
+    if (!prefs.putBool(("relay_pair" + String(p)).c_str(), relayPairEnable[p])) fails++;
   }
 
   prefs.end();
@@ -323,12 +341,18 @@ void loadConfig() {
   mqttUser[sizeof(mqttUser) - 1] = '\0';
   strncpy(mqttPass, prefs.getString(NVS_KEY("mqtt_pass"), mqttPass).c_str(), sizeof(mqttPass) - 1);
   mqttPass[sizeof(mqttPass) - 1] = '\0';
-  strncpy(mqttTopic, prefs.getString(NVS_KEY("mqtt_topic"), mqttTopic).c_str(), sizeof(mqttTopic) - 1);
-  mqttTopic[sizeof(mqttTopic) - 1] = '\0';
-  strncpy(mqttFullValue, prefs.getString(NVS_KEY("mqtt_full"), mqttFullValue).c_str(), sizeof(mqttFullValue) - 1);
-  mqttFullValue[sizeof(mqttFullValue) - 1] = '\0';
-  strncpy(mqttMissingValue, prefs.getString(NVS_KEY("mqtt_missing"), mqttMissingValue).c_str(), sizeof(mqttMissingValue) - 1);
-  mqttMissingValue[sizeof(mqttMissingValue) - 1] = '\0';
+  strncpy(mqttTopicFull, prefs.getString(NVS_KEY("mqtt_topic_full"), mqttTopicFull).c_str(), sizeof(mqttTopicFull) - 1);
+  mqttTopicFull[sizeof(mqttTopicFull) - 1] = '\0';
+  strncpy(mqttValueFull, prefs.getString(NVS_KEY("mqtt_val_full"), mqttValueFull).c_str(), sizeof(mqttValueFull) - 1);
+  mqttValueFull[sizeof(mqttValueFull) - 1] = '\0';
+  strncpy(mqttTopicOneTaken, prefs.getString(NVS_KEY("mqtt_topic_one"), mqttTopicOneTaken).c_str(), sizeof(mqttTopicOneTaken) - 1);
+  mqttTopicOneTaken[sizeof(mqttTopicOneTaken) - 1] = '\0';
+  strncpy(mqttValueOneTaken, prefs.getString(NVS_KEY("mqtt_val_one"), mqttValueOneTaken).c_str(), sizeof(mqttValueOneTaken) - 1);
+  mqttValueOneTaken[sizeof(mqttValueOneTaken) - 1] = '\0';
+  strncpy(mqttTopicTwoTaken, prefs.getString(NVS_KEY("mqtt_topic_two"), mqttTopicTwoTaken).c_str(), sizeof(mqttTopicTwoTaken) - 1);
+  mqttTopicTwoTaken[sizeof(mqttTopicTwoTaken) - 1] = '\0';
+  strncpy(mqttValueTwoTaken, prefs.getString(NVS_KEY("mqtt_val_two"), mqttValueTwoTaken).c_str(), sizeof(mqttValueTwoTaken) - 1);
+  mqttValueTwoTaken[sizeof(mqttValueTwoTaken) - 1] = '\0';
 
   oscEnabled = prefs.getBool(NVS_KEY("osc_en"), oscEnabled);
   strncpy(oscIp, prefs.getString(NVS_KEY("osc_ip"), oscIp).c_str(), sizeof(oscIp) - 1);
@@ -336,10 +360,13 @@ void loadConfig() {
   oscPort = prefs.getUShort(NVS_KEY("osc_port"), oscPort);
   strncpy(oscAddressFull, prefs.getString(NVS_KEY("osc_addr_full"), oscAddressFull).c_str(), sizeof(oscAddressFull) - 1);
   oscAddressFull[sizeof(oscAddressFull) - 1] = '\0';
-  strncpy(oscAddressMissing, prefs.getString(NVS_KEY("osc_addr_miss"), oscAddressMissing).c_str(), sizeof(oscAddressMissing) - 1);
-  oscAddressMissing[sizeof(oscAddressMissing) - 1] = '\0';
   oscValueFull = prefs.getInt(NVS_KEY("osc_val_full"), oscValueFull);
-  oscValueMissing = prefs.getInt(NVS_KEY("osc_val_miss"), oscValueMissing);
+  strncpy(oscAddressOneTaken, prefs.getString(NVS_KEY("osc_addr_one"), oscAddressOneTaken).c_str(), sizeof(oscAddressOneTaken) - 1);
+  oscAddressOneTaken[sizeof(oscAddressOneTaken) - 1] = '\0';
+  oscValueOneTaken = prefs.getInt(NVS_KEY("osc_val_one"), oscValueOneTaken);
+  strncpy(oscAddressTwoTaken, prefs.getString(NVS_KEY("osc_addr_two"), oscAddressTwoTaken).c_str(), sizeof(oscAddressTwoTaken) - 1);
+  oscAddressTwoTaken[sizeof(oscAddressTwoTaken) - 1] = '\0';
+  oscValueTwoTaken = prefs.getInt(NVS_KEY("osc_val_two"), oscValueTwoTaken);
 
   debounceTime = prefs.getULong(NVS_KEY("debounce"), debounceTime);
   heartbeatInterval = prefs.getULong(NVS_KEY("heartbeat"), heartbeatInterval);
@@ -357,8 +384,8 @@ void loadConfig() {
   strncpy(authPass, prefs.getString(NVS_KEY("auth_pass"), authPass).c_str(), sizeof(authPass) - 1);
   authPass[sizeof(authPass) - 1] = '\0';
 
-  for (int i = 0; i < SENSOR_NUM; i++) {
-    sensorEnable[i] = prefs.getBool(("en" + String(i)).c_str(), sensorEnable[i]);
+  for (int p = 0; p < RELAY_PAIR_NUM; p++) {
+    relayPairEnable[p] = prefs.getBool(("relay_pair" + String(p)).c_str(), relayPairEnable[p]);
   }
 
   prefs.end();

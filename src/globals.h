@@ -33,14 +33,29 @@ constexpr const char* NVS_KEY(const char (&s)[N]) {
 #define ETH_INT  -1
 #define ETH_RST  -1
 
-#define SENSOR_NUM 6
+// Chi con 2 sensor (vi tri 1+2), logic GOP: xem checkSensors() trong main.cpp.
+#define SENSOR_NUM 2
 extern const uint8_t sensorPins[SENSOR_NUM];
-extern const uint8_t relayPins[SENSOR_NUM];
+
+// Van con du 6 relay vat ly (day dien san co tu truoc) - dung 3 CAP relay de BACKUP: cap nao
+// duoc tick (relayPairEnable) thi nhan cung tin hieu relay1/relay2 tinh tu logic sach, cap nao
+// khong tick thi luon OFF. Tick nhieu cap cung luc = chay song song du phong; hong 1 cap thi bo
+// tick cap do, tick cap con lai, khong can nap lai firmware.
+#define RELAY_NUM 6
+#define RELAY_PAIR_NUM (RELAY_NUM / 2)
+extern const uint8_t relayPins[RELAY_NUM];
+extern bool relayPairEnable[RELAY_PAIR_NUM];
 
 #define SENSOR_ACTIVE LOW
 #define RELAY_ON  HIGH
 #define RELAY_OFF LOW
 #define RELAY_TEST_PULSE_MS 2000UL
+
+// Trang thai sach: 1 = du sach (ca 2 sensor kich), 2 = da lay 1 cuon (dung 1 trong 2 sensor
+// kich), 3 = da lay ca 2 cuon (khong sensor nao kich).
+#define BOOK_STATE_FULL      1
+#define BOOK_STATE_ONE_TAKEN 2
+#define BOOK_STATE_TWO_TAKEN 3
 
 // Local UDP port de mo socket OSC (chi gui di, khong nghe). Tach ra hang so de khong bi
 // nham voi oscPort (port DICH, cau hinh duoc tren web).
@@ -66,19 +81,26 @@ extern char mqttServer[32];
 extern uint16_t mqttPort;
 extern char mqttUser[32];
 extern char mqttPass[32];
-extern char mqttTopic[64];        // moi vi tri se publish vao "<mqttTopic>/<1..6>"
-extern char mqttFullValue[32];
-extern char mqttMissingValue[32];
 
-// OSC - CO va TRONG la 2 message OSC hoan toan tach biet (dia chi rieng + int rieng).
-// "{id}" trong 2 dia chi duoc thay bang vi tri (1..6) truoc khi gui.
+// Moi trang thai (FULL/ONE_TAKEN/TWO_TAKEN) co topic + payload rieng, ban 1 lan khi VUA
+// CHUYEN vao trang thai do (edge-triggered, giong OSC ben duoi).
+extern char mqttTopicFull[64];
+extern char mqttValueFull[32];
+extern char mqttTopicOneTaken[64];
+extern char mqttValueOneTaken[32];
+extern char mqttTopicTwoTaken[64];
+extern char mqttValueTwoTaken[32];
+
+// OSC - 3 trang thai = 3 message OSC hoan toan tach biet (dia chi rieng + int rieng moi cai).
 extern bool oscEnabled;
 extern char oscIp[32];
 extern uint16_t oscPort;
 extern char oscAddressFull[64];
-extern char oscAddressMissing[64];
 extern int oscValueFull;
-extern int oscValueMissing;
+extern char oscAddressOneTaken[64];
+extern int oscValueOneTaken;
+extern char oscAddressTwoTaken[64];
+extern int oscValueTwoTaken;
 
 // Admin auth (Basic Auth tren cac endpoint thay doi trang thai)
 extern char authUser[32];
@@ -92,28 +114,28 @@ extern char ethStaticGateway[16];
 extern char ethStaticNetmask[16];
 extern bool ethUseStaticFirst;
 
-// Debounce dung chung cho ca 6 vi tri
+// Debounce dung chung cho ca 2 sensor
 extern unsigned long debounceTime;
 
-// Heartbeat/resync: dinh ky gui lai trang thai hien tai cua ca 6 vi tri qua MQTT/OSC
-// (khong doi topic/dia chi, chi gui lai gia tri hien tai) - de bu lai neu 1 message tai
-// thoi diem doi trang thai bi rot mang (MQTT QoS0/UDP OSC deu khong dam bao gui toi noi).
-// 0 = tat heartbeat.
+// Heartbeat/resync: dinh ky gui lai trang thai sach hien tai qua MQTT/OSC (khong doi
+// topic/dia chi, chi gui lai gia tri hien tai) - de bu lai neu message tai thoi diem doi
+// trang thai bi rot mang (MQTT QoS0/UDP OSC deu khong dam bao gui toi noi). 0 = tat heartbeat.
 extern unsigned long heartbeatInterval;
 
-// Per-sensor state
-extern bool sensorEnable[SENSOR_NUM];
-extern bool relayState[SENSOR_NUM];   // trang thai da debounce cua sensor
-extern bool relayOutput[SENSOR_NUM];  // trang thai relay THUC TE (da gate enable + test), hien len web
+// Per-sensor state (debounce), tach biet voi relay dau ra (relay la KET QUA cua logic gop
+// ca 2 sensor, khong con 1:1 voi tung sensor nua - xem checkSensors() trong main.cpp).
+extern bool sensorState[SENSOR_NUM];   // trang thai da debounce: true = co sach o vi tri do
+extern bool relayOutput[RELAY_NUM];    // trang thai THUC TE tung relay vat ly (0..5), hien len web
+extern int bookState;                  // BOOK_STATE_FULL / _ONE_TAKEN / _TWO_TAKEN, 0 = chua xac dinh (truoc lan check dau)
 
-// dinh nghia trong main.cpp, goi tu web.cpp (nut Test tren web)
-void triggerRelayTest(int id);
+// Nut Test tren web: dao trang thai CA 2 relay tam thoi (~2s) de kiem tra day dien, bat ke
+// trang thai sach thuc te. checkSensors() tu dong tra ve dung trang thai (tinh theo bookState)
+// ngay khi xung Test ket thuc - khong can goi resync rieng, vi relay duoc tinh lai moi vong
+// loop() thay vi edge-triggered nhu MQTT/OSC. Dinh nghia trong main.cpp.
+void triggerRelayTest();
+bool relayTestActive();
 
-// true neu vi tri dang trong xung Test 2s. Dung ham chung (thay vi tu so sanh moc thoi gian
-// o moi cho) de logic chong tran millis() chi nam o 1 noi - xem main.cpp.
-bool relayTestActive(int id);
-
-// Gui lai trang thai HIEN TAI cua ca 6 vi tri qua MQTT/OSC, dung nguyen topic/dia chi/gia tri
-// binh thuong - chi la "nhac lai" cue gan nhat, khong phai message rieng. Dung cho heartbeat
-// dinh ky va cho buoc ket thuc chuoi Test. Dinh nghia trong main.cpp.
-void resyncAllPositions();
+// Gui lai trang thai sach HIEN TAI qua MQTT/OSC, dung nguyen topic/dia chi/gia tri binh
+// thuong - chi la "nhac lai" cue gan nhat, khong phai message rieng. Dung cho heartbeat dinh
+// ky va cho buoc ket thuc chuoi Test. Dinh nghia trong main.cpp.
+void resyncBookState();

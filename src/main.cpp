@@ -1,11 +1,12 @@
 /*
- * Gia sach - moi sensor (vi tri) doc high/low doc lap, tu kich relay rieng,
- * dong thoi bao trang thai qua MQTT + OSC rieng tung vi tri (khong co trang thai tong).
+ * Gia sach - 2 sensor doc high/low doc lap (debounce rieng), GOP lai thanh 1 trong 3 trang
+ * thai sach (du sach / lay 1 cuon / lay 2 cuon), tu do dieu khien 2 relay va bao trang thai
+ * qua MQTT + OSC (3 topic/dia chi rieng, 1 cho moi trang thai).
  *
  * Nguon ghep:
  *  - ETH (W5500 SPI) + WiFi-event glue + MQTT (esp_mqtt_client) + OSC (UDP tu encode)
  *    lay nguyen tu project "can tim" (da bo phan RS485 + distance).
- *  - Sensor/relay 6 kenh doc lap (pin, debounce, follow-relay) lay tu project "dat the".
+ *  - Sensor doc lap (pin, debounce) lay tu project "dat the", rut tu 6 xuong 2 kenh.
  *  - Diagnostic AP (phat wifi bao IP) lay tu project "dat the".
  */
 
@@ -17,8 +18,10 @@
 // ======================================================================
 // PIN CONFIG
 // ======================================================================
-const uint8_t sensorPins[SENSOR_NUM] = {1, 2, 42, 41, 40, 39};
-const uint8_t relayPins[SENSOR_NUM]  = {4, 5, 6, 16, 15, 7};
+const uint8_t sensorPins[SENSOR_NUM] = {1, 2};
+// 3 cap: cap0=relay1+2 (4,5), cap1=relay3+4 (6,16), cap2=relay5+6 (15,7). Xem RELAY_PAIR_NUM
+// trong globals.h.
+const uint8_t relayPins[RELAY_NUM] = {4, 5, 6, 16, 15, 7};
 
 // ======================================================================
 // STATE / CONFIG
@@ -44,18 +47,24 @@ char mqttUser[32]         = "huykaamaa";
 // Mac dinh RONG - khong hardcode mat khau that vao source (source nam trong git). Nhap 1 lan
 // qua Web UI, sau do no nam trong NVS va song qua cac lan nap firmware moi.
 char mqttPass[32]         = "";
-char mqttTopic[64]        = "giasach/vitri"; // moi vi tri se publish vao "<mqttTopic>/<1..6>"
-char mqttFullValue[32]    = "FULL";
-char mqttMissingValue[32] = "MISSING";
+
+char mqttTopicFull[64]        = "giasach/trangthai/1";
+char mqttValueFull[32]        = "FULL";
+char mqttTopicOneTaken[64]    = "giasach/trangthai/2";
+char mqttValueOneTaken[32]    = "ONE_TAKEN";
+char mqttTopicTwoTaken[64]    = "giasach/trangthai/3";
+char mqttValueTwoTaken[32]    = "TWO_TAKEN";
 
 // OSC
 bool oscEnabled = false;
 char oscIp[32]             = "192.168.99.100";
 uint16_t oscPort           = 9000;
-char oscAddressFull[64]    = "/composition/layers/1/clips/{id}/connect";
-char oscAddressMissing[64] = "/composition/layers/1/clips/{id}/disconnect";
-int oscValueFull     = 1;
-int oscValueMissing  = 1;
+char oscAddressFull[64]        = "/composition/layers/1/clips/1/connect";
+int oscValueFull               = 1;
+char oscAddressOneTaken[64]    = "/composition/layers/1/clips/2/connect";
+int oscValueOneTaken           = 1;
+char oscAddressTwoTaken[64]    = "/composition/layers/1/clips/3/connect";
+int oscValueTwoTaken           = 1;
 
 // Admin auth
 char authUser[32] = "admin";
@@ -67,33 +76,37 @@ char ethStaticGateway[16] = "192.168.99.1";
 char ethStaticNetmask[16] = "255.255.255.0";
 bool ethUseStaticFirst = false;
 
-// Debounce dung chung cho ca 6 vi tri
+// Debounce dung chung cho ca 2 sensor
 unsigned long debounceTime = 500; // ms
 
 // Heartbeat/resync - xem giai thich trong globals.h. Mac dinh 60s.
 unsigned long heartbeatInterval = 60000; // ms, 0 = tat
 
 // Per-sensor state
-bool sensorEnable[SENSOR_NUM]        = {true, true, true, true, true, true};
-bool relayState[SENSOR_NUM]          = {false};
-bool relayOutput[SENSOR_NUM]         = {false};
-static bool relayReading[SENSOR_NUM] = {false};   // raw read gan nhat, dung de bat canh
-static unsigned long relayTimer[SENSOR_NUM] = {0};
-static bool lastSentState[SENSOR_NUM] = {false};  // trang thai (state && enable) da bao MQTT/OSC lan gan nhat
+bool sensorState[SENSOR_NUM]         = {false};
+static bool sensorReading[SENSOR_NUM] = {false};   // raw read gan nhat, dung de bat canh
+static unsigned long sensorTimer[SENSOR_NUM] = {0};
+int bookState = 0; // 0 = chua xac dinh, xem BOOK_STATE_* trong globals.h
 
-// Nut Test tren web: ep relay ON tam thoi. relayTestUntil CHI co y nghia khi relayTestPending
-// = true. Truoc day chi co relayTestUntil voi sentinel 0 nghia la "khong test", nhung phep tru
-// chong tran (0 - millis()) lai ra so DUONG khi millis() > 2^31 (~24.9 ngay uptime) - moi relay
-// chua tung bam Test se bi ep ON suot 24.9 ngay ke tiep. Co pending tach bach "co moc hop le
-// khong" khoi "moc do da qua chua", nen khong con phu thuoc vao gia tri sentinel nao ca.
-static unsigned long relayTestUntil[SENSOR_NUM] = {0};
-static bool relayTestPending[SENSOR_NUM]        = {false};
+// Relay vat ly + cap nao dang bat (backup) - xem giai thich trong globals.h
+bool relayOutput[RELAY_NUM] = {false};
+bool relayPairEnable[RELAY_PAIR_NUM] = {true, false, false}; // mac dinh chi cap 1 (day dien goc)
 
-bool relayTestActive(int id) {
-  if (id < 0 || id >= SENSOR_NUM) return false;
-  if (!relayTestPending[id]) return false;
-  if ((long)(relayTestUntil[id] - millis()) > 0) return true;
-  relayTestPending[id] = false;  // het xung, don co lai
+// Nut Test tren web: dao trang thai CA 2 relay tam thoi. relayTestUntil CHI co y nghia khi
+// relayTestPending = true (tranh bug cu: sentinel 0 = "khong test" bi hieu nham thanh so
+// DUONG sau khi millis() vuot 2^31, ~24.9 ngay uptime).
+static unsigned long relayTestUntil = 0;
+static bool relayTestPending = false;
+
+void triggerRelayTest() {
+  relayTestUntil = millis() + RELAY_TEST_PULSE_MS;
+  relayTestPending = true;
+}
+
+bool relayTestActive() {
+  if (!relayTestPending) return false;
+  if ((long)(relayTestUntil - millis()) > 0) return true;
+  relayTestPending = false; // het xung, don co lai
   return false;
 }
 
@@ -140,54 +153,69 @@ static void startDiagAp(bool isFallback) {
   }
 }
 
-void triggerRelayTest(int id) {
-  if (id < 0 || id >= SENSOR_NUM) return;
-  relayTestUntil[id] = millis() + RELAY_TEST_PULSE_MS;
-  relayTestPending[id] = true;
-}
-
 // ======================================================================
-// SENSOR + RELAY LOOP - moi vi tri doc lap hoan toan, khong co trang thai tong
+// SENSOR + RELAY LOOP - debounce rieng tung sensor, roi GOP thanh 1 trong 3 trang thai sach
 // ======================================================================
 static void checkSensors() {
   for (int i = 0; i < SENSOR_NUM; i++) {
     bool active = (digitalRead(sensorPins[i]) == SENSOR_ACTIVE);
 
-    // debounce (dung chung 1 gia tri debounceTime cho ca 6, moi kenh co timer rieng)
-    if (active != relayReading[i]) {
-      relayReading[i] = active;
-      relayTimer[i] = millis();
+    // debounce (dung chung 1 gia tri debounceTime cho ca 2 sensor, moi kenh co timer rieng)
+    if (active != sensorReading[i]) {
+      sensorReading[i] = active;
+      sensorTimer[i] = millis();
     }
-    if (millis() - relayTimer[i] >= debounceTime) {
-      relayState[i] = relayReading[i];
+    if (millis() - sensorTimer[i] >= debounceTime) {
+      sensorState[i] = sensorReading[i];
     }
+  }
 
-    // chi vi tri duoc tick (sensorEnable) moi thuc su kick relay; nut Test tren web
-    // van ep ON tam thoi (2s) bat ke co tick hay khong, de kiem tra day dien.
-    bool testActive = relayTestActive(i);
-    relayOutput[i] = (relayState[i] && sensorEnable[i]) || testActive;
-    digitalWrite(relayPins[i], relayOutput[i] ? RELAY_ON : RELAY_OFF);
+  // Ca 2 sensor kich (2 cuon sach dang o tren ke) = du sach. Dung 1 trong 2 kich = da lay 1
+  // cuon. Khong sensor nao kich = da lay ca 2 cuon.
+  bool s1 = sensorState[0];
+  bool s2 = sensorState[1];
+  int newState;
+  if (s1 && s2) newState = BOOK_STATE_FULL;
+  else if (s1 != s2) newState = BOOK_STATE_ONE_TAKEN;
+  else newState = BOOK_STATE_TWO_TAKEN;
 
-    // Bao MQTT/OSC khi trang thai THUC TE (co tinh enable, KHONG tinh test-pulse) doi -
-    // tuc la ca khi sensor doi trang thai LAN khi checkbox Enable vua duoc tick/bo tick tren
-    // web, de nguoi nhan khong bi ket o cue cu sau khi bat/tat 1 vi tri.
-    bool effectiveState = relayState[i] && sensorEnable[i];
-    if (effectiveState != lastSentState[i]) {
-      lastSentState[i] = effectiveState;
-      triggerSensor(i, effectiveState);
-    }
+  // relay1 CHI on o trang thai du sach; relay2 on o ca 2 trang thai "da lay sach" (1 hoac 2
+  // cuon) va tiep tuc ON o trang thai lay 2 cuon, khong tu tat.
+  bool relay1Logic = (newState == BOOK_STATE_FULL);
+  bool relay2Logic = !relay1Logic;
+
+  // Nut Test: dao NGUOC tin hieu relay1/relay2 tam thoi de kiem tra day dien, bat ke trang
+  // thai sach that. Khong dung vao bookState/relay*Logic ngoai xung test - het xung thi vong
+  // loop() ke tiep tinh lai tu bookState nhu binh thuong, tu dong "resync" ve dung trang thai,
+  // khong can goi gi them.
+  if (relayTestActive()) {
+    relay1Logic = !relay1Logic;
+    relay2Logic = !relay2Logic;
+  }
+
+  // Phan tin hieu relay1/relay2 ra CA cac cap relay vat ly dang duoc tick (backup) - cap
+  // khong tick thi luon OFF du logic la gi.
+  for (int p = 0; p < RELAY_PAIR_NUM; p++) {
+    bool on = relayPairEnable[p];
+    relayOutput[2 * p]     = on && relay1Logic;
+    relayOutput[2 * p + 1] = on && relay2Logic;
+    digitalWrite(relayPins[2 * p],     relayOutput[2 * p]     ? RELAY_ON : RELAY_OFF);
+    digitalWrite(relayPins[2 * p + 1], relayOutput[2 * p + 1] ? RELAY_ON : RELAY_OFF);
+  }
+
+  if (newState != bookState) {
+    bookState = newState;
+    triggerBookState(bookState);
   }
 }
 
-// Gui lai trang thai HIEN TAI (khong tinh test-pulse) cua ca 6 vi tri qua MQTT/OSC, dung
-// nguyen topic/dia chi/gia tri nhu binh thuong - khong phai message rieng biet, chi la
-// "nhac lai" cue gan nhat. Bu lai truong hop 1 lan doi trang thai bi rot mang (F31-style,
-// xem docs/todo tuong ung ben project can tim). Dung cho heartbeat dinh ky va cho buoc
-// ket thuc chuoi Test trong web.cpp.
-void resyncAllPositions() {
-  for (int i = 0; i < SENSOR_NUM; i++) {
-    triggerSensor(i, lastSentState[i]);
-  }
+// Gui lai trang thai sach HIEN TAI qua MQTT/OSC, dung nguyen topic/dia chi/gia tri nhu binh
+// thuong - khong phai message rieng biet, chi la "nhac lai" cue gan nhat. Bu lai truong hop 1
+// lan doi trang thai bi rot mang. Dung cho heartbeat dinh ky va cho buoc ket thuc chuoi Test
+// trong web.cpp.
+void resyncBookState() {
+  if (bookState == 0) return; // chua co lan check nao xong, chua co gi de nhac lai
+  triggerBookState(bookState);
 }
 
 // ======================================================================
@@ -200,6 +228,8 @@ void setup() {
 
   for (int i = 0; i < SENSOR_NUM; i++) {
     pinMode(sensorPins[i], INPUT_PULLUP);
+  }
+  for (int i = 0; i < RELAY_NUM; i++) {
     pinMode(relayPins[i], OUTPUT);
     digitalWrite(relayPins[i], RELAY_OFF);
   }
@@ -299,6 +329,6 @@ void loop() {
   static unsigned long lastHeartbeatMs = millis();
   if (heartbeatInterval > 0 && (millis() - lastHeartbeatMs) >= heartbeatInterval) {
     lastHeartbeatMs = millis();
-    resyncAllPositions();
+    resyncBookState();
   }
 }

@@ -29,28 +29,14 @@ static void writeOscInt32(WiFiUDP &udp, int32_t value) {
   udp.write(bytes, sizeof(bytes));
 }
 
-// addressTemplate dung chung cho ca 6 vi tri, "{id}" duoc thay bang vi tri (1..6) truoc khi gui
-// vd "/composition/layers/1/clips/{id}/connect" -> vi tri 3 se gui "/composition/layers/1/clips/3/connect"
-static void sendOscAt(const char *addressTemplate, int id, int value) {
+static void sendOscAt(const char *address, int value) {
   if (!oscEnabled || strlen(oscIp) == 0 || oscPort == 0) return;
-  String addr = addressTemplate;
-  addr.replace("{id}", String(id));
-  if (addr.length() == 0 || addr[0] != '/') return; // OSC address pattern phai bat dau bang '/'
+  if (address[0] != '/') return; // OSC address pattern phai bat dau bang '/'
   if (!oscUdp.beginPacket(oscIp, oscPort)) return;
-  writeOscString(oscUdp, addr.c_str());
+  writeOscString(oscUdp, address);
   writeOscString(oscUdp, ",i");
   writeOscInt32(oscUdp, value);
   oscUdp.endPacket();
-}
-
-// CO va TRONG la 2 message OSC doc lap - dia chi rieng + gia tri rieng cho tung trang thai,
-// khong dung 1 dia chi roi doi int 1/0.
-static void sendOscPosition(int id, bool state) {
-  if (state) {
-    sendOscAt(oscAddressFull, id, oscValueFull);
-  } else {
-    sendOscAt(oscAddressMissing, id, oscValueMissing);
-  }
 }
 
 // ======================================================================
@@ -111,21 +97,39 @@ void mqttInit() {
   }
 }
 
-// Bao trang thai RIENG tung vi tri - moi vi tri 1 topic MQTT rieng "<mqttTopic>/<id>",
-// OSC dung 2 dia chi rieng (CO/TRONG), id chen vao dia chi qua "{id}".
-void triggerSensor(int id, bool state) {
-  const char *value = state ? mqttFullValue : mqttMissingValue;
+// Bao trang thai sach - moi trang thai (FULL/ONE_TAKEN/TWO_TAKEN) co topic MQTT + dia chi OSC
+// rieng, ban 1 lan khi VUA CHUYEN vao trang thai do.
+void triggerBookState(int state) {
+  const char *topic;
+  const char *value;
+  const char *oscAddr;
+  int oscValue;
+
+  switch (state) {
+    case BOOK_STATE_ONE_TAKEN:
+      topic = mqttTopicOneTaken; value = mqttValueOneTaken;
+      oscAddr = oscAddressOneTaken; oscValue = oscValueOneTaken;
+      break;
+    case BOOK_STATE_TWO_TAKEN:
+      topic = mqttTopicTwoTaken; value = mqttValueTwoTaken;
+      oscAddr = oscAddressTwoTaken; oscValue = oscValueTwoTaken;
+      break;
+    case BOOK_STATE_FULL:
+    default:
+      topic = mqttTopicFull; value = mqttValueFull;
+      oscAddr = oscAddressFull; oscValue = oscValueFull;
+      break;
+  }
 
   if (mqttEnabled) {
     if (mqtt && mqttConnected) {
       // enqueue() khong block (khac publish() co the treo loop() khi broker dang reconnect)
-      String topic = String(mqttTopic) + "/" + String(id + 1);
-      esp_mqtt_client_enqueue(mqtt, topic.c_str(), value, 0, 0, 0, true);
+      esp_mqtt_client_enqueue(mqtt, topic, value, 0, 0, 0, true);
     } else {
       LOG("MQTT publish skipped: not connected/initialized");
     }
   }
-  sendOscPosition(id + 1, state);
+  sendOscAt(oscAddr, oscValue);
 
-  LOG("Vi tri %d = %s", id + 1, value);
+  LOG("Trang thai sach = %d (%s)", state, value);
 }
