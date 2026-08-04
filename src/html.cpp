@@ -163,6 +163,15 @@ void handleRoot() {
   html += "<form action='/test_osc' method='POST'><input class='btn' type='submit' value='Test OSC (trạng thái 1→2→3)'></form>";
   html += "</div>";
 
+  html += "<div class='panel'>";
+  html += "<h3>Firmware Update (OTA)</h3>";
+  html += "<div class='note'>Chọn file firmware.bin (build từ PlatformIO: .pio/build/esp32-s3-devkitc-1/firmware.bin) rồi bấm Upload. Board tự khởi động lại sau khi nạp xong. KHÔNG rút nguồn/mất mạng giữa chừng - có thể phải nạp lại qua USB nếu hỏng.</div>";
+  html += "<form action='/update' method='POST' enctype='multipart/form-data' onsubmit=\"return confirm('Nạp firmware mới? Board sẽ khởi động lại sau khi xong.');\">";
+  html += "<input type='file' name='firmware' accept='.bin' required style='width:100%;padding:10px;border:1px solid #bfc9d6;border-radius:8px;margin-bottom:8px;background:#fff'>";
+  html += "<input class='btn' type='submit' value='Upload & Update'>";
+  html += "</form>";
+  html += "</div>";
+
   html += "</div></body></html>";
 
   server.send(200, "text/html", html);

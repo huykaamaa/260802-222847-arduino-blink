@@ -2,6 +2,7 @@
 #include "mqtt.h"
 #include "web.h"
 #include <cstring>
+#include <Update.h>
 
 // F6-style: gate state-changing endpoints (/save, /test_mqtt, /test_osc, /test_relay)
 // behind HTTP Basic Auth. Root GET "/" va polling GET "/data" deliberately khong goi
@@ -61,6 +62,9 @@ static const char* bookStateLabel(int state) {
 
 void handleData() {
   String data;
+  // Build timestamp cua chinh lan compile nay - de nhan biet OTA co that su nap ban moi khong
+  // (build cu se hien gio/ngay cu tren dashboard sau khi reload).
+  data += "<span style='font-size:12px;color:#94a3b8'>Firmware build: " __DATE__ " " __TIME__ "</span><br>";
   data += "<b>MQTT:</b> ";
   if (!mqttEnabled) data += "<span style='color:gray'>DISABLED</span>";
   else data += mqttConnected ? "<span style='color:green'>CONNECTED</span>" : "<span style='color:red'>DISCONNECTED</span>";
@@ -279,6 +283,68 @@ void handleTestRelay() {
 }
 
 // ======================================================================
+// OTA (upload .bin qua web) - dung thu vien Update.h co san trong ESP32 core, khong can them
+// thu vien nao. Partition table mac dinh cua board (default_8MB.csv) da co san 2 slot OTA
+// (app0/app1), khong can dong gi o platformio.ini.
+// ======================================================================
+
+// true trong suot 1 request /update tu luc auth duoc kiem tra (o buoc START) - dung chung giua
+// handleUpdateUpload() (goi nhieu lan trong luc nhan tung chunk) va handleUpdateFinish() (goi 1
+// lan sau khi nhan xong) vi Auth chi kiem tra duoc 1 lan luc bat dau, khong the goi lai
+// requireAuth() o giua chung (header da xu ly xong).
+static bool otaAuthOk = false;
+
+void handleUpdateUpload() {
+  HTTPUpload &upload = server.upload();
+
+  if (upload.status == UPLOAD_FILE_START) {
+    // Kiem tra auth NGAY tu chunk dau, truoc khi ghi byte nao vao flash - khong doi den
+    // handleUpdateFinish() (luc do da nhan/bo qua toan bo file, phi bang thong + thoi gian).
+    otaAuthOk = server.authenticate(authUser, authPass);
+    if (!otaAuthOk) {
+      LOG("OTA: tu choi upload - sai auth");
+      return;
+    }
+    LOG("OTA: bat dau nhan file '%s'", upload.filename.c_str());
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+      Update.printError(Serial);
+    }
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (!otaAuthOk) return;
+    if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+      Update.printError(Serial);
+    }
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (!otaAuthOk) return;
+    if (Update.end(true)) {
+      LOG("OTA: nhan xong %u bytes", (unsigned)upload.totalSize);
+    } else {
+      Update.printError(Serial);
+    }
+  } else if (upload.status == UPLOAD_FILE_ABORTED) {
+    Update.end();
+    LOG("OTA: upload bi huy giua chung");
+  }
+}
+
+// Chay SAU khi handleUpdateUpload() da nhan xong toan bo file (hoac tu choi tu dau vi sai
+// auth). Bao ket qua len trinh duyet roi tu reboot neu ghi flash thanh cong.
+void handleUpdateFinish() {
+  if (!otaAuthOk) {
+    server.requestAuthentication();
+    return;
+  }
+  bool ok = !Update.hasError();
+  server.send(200, "text/html", ok
+    ? "<script>alert('OTA thanh cong - dang khoi dong lai...');window.location.href='/';</script>"
+    : "<script>alert('OTA THAT BAI - xem log Serial, board van chay firmware cu.');window.location.href='/';</script>");
+  if (ok) {
+    delay(500); // cho response gui xong truoc khi reboot
+    ESP.restart();
+  }
+}
+
+// ======================================================================
 // NVS CONFIG LOAD/SAVE
 // ======================================================================
 int saveConfig() {
@@ -289,8 +355,12 @@ int saveConfig() {
   if (!prefs.putString(NVS_KEY("mqtt_ip"), mqttServer)) fails++;
   if (!prefs.putUShort(NVS_KEY("mqtt_port"), mqttPort)) fails++;
   if (!prefs.putBool(NVS_KEY("mqtt_en"), mqttEnabled)) fails++;
-  if (!prefs.putString(NVS_KEY("mqtt_user"), mqttUser)) fails++;
-  if (!prefs.putString(NVS_KEY("mqtt_pass"), mqttPass)) fails++;
+  // putString() tra ve SO BYTE DA GHI - voi chuoi RONG (vd mqtt anonymous: User/Pass de trong
+  // co chu dich), gia tri do luon la 0 ke ca khi ghi THANH CONG, nen "== 0" khong dung duoc de
+  // bao loi trong truong hop nay. Van goi putString binh thuong (de luu dung gia tri rong vao
+  // NVS), chi bo qua viec dem fail khi nguon von di da rong tu dau.
+  if (prefs.putString(NVS_KEY("mqtt_user"), mqttUser) == 0 && strlen(mqttUser) > 0) fails++;
+  if (prefs.putString(NVS_KEY("mqtt_pass"), mqttPass) == 0 && strlen(mqttPass) > 0) fails++;
   if (!prefs.putString(NVS_KEY("mqtt_topic_full"), mqttTopicFull)) fails++;
   if (!prefs.putString(NVS_KEY("mqtt_val_full"), mqttValueFull)) fails++;
   if (!prefs.putString(NVS_KEY("mqtt_topic_one"), mqttTopicOneTaken)) fails++;

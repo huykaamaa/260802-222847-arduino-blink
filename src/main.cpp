@@ -300,6 +300,7 @@ void setup() {
   server.on("/test_mqtt", HTTP_POST, handleTestMQTT);
   server.on("/test_osc", HTTP_POST, handleTestOSC);
   server.on("/test_relay", HTTP_POST, handleTestRelay);
+  server.on("/update", HTTP_POST, handleUpdateFinish, handleUpdateUpload);
   server.begin();
   oscUdp.begin(OSC_LOCAL_PORT);
 
