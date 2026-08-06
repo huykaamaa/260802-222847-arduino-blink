@@ -69,7 +69,7 @@ void handleRoot() {
 
   html += "<div class='panel'>";
   html += "<h3>Sensor / Relay</h3>";
-  html += "<div class='note'>2 sensor độc lập (vị trí 1, 2). Cả 2 có sách → relay 1 ON, relay 2 OFF. Lấy 1 cuốn (1 trong 2 sensor trống) → relay 1 OFF, relay 2 ON. Lấy cả 2 cuốn → relay 1 OFF, relay 2 tiếp tục ON.</div>";
+  html += "<div class='note'>Relay 1 LUÔN ON (không phụ thuộc sách). 2 sensor độc lập (vị trí 1, 2): cả 2 có sách → relay 2 OFF. Lấy 1 cuốn (1 trong 2 sensor trống) → relay 2 ON. Lấy cả 2 cuốn → relay 2 tiếp tục ON.</div>";
   html += "<button class='btn btn-test' style='width:100%;margin-top:10px' type='submit' form='testRelayForm'>Test Relay (đảo cả 2 relay ~2 giây)</button>";
   html += "</div>";
 

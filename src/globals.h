@@ -38,7 +38,7 @@ constexpr const char* NVS_KEY(const char (&s)[N]) {
 extern const uint8_t sensorPins[SENSOR_NUM];
 
 // Van con du 6 relay vat ly (day dien san co tu truoc) - dung 3 CAP relay de BACKUP: cap nao
-// duoc tick (relayPairEnable) thi nhan cung tin hieu relay1/relay2 tinh tu logic sach, cap nao
+// duoc tick (relayPairEnable) thi nhan cung tin hieu relay1 (luon ON) / relay2 (theo sach), cap nao
 // khong tick thi luon OFF. Tick nhieu cap cung luc = chay song song du phong; hong 1 cap thi bo
 // tick cap do, tick cap con lai, khong can nap lai firmware.
 #define RELAY_NUM 6

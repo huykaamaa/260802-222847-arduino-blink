@@ -1,6 +1,7 @@
 /*
  * Gia sach - 2 sensor doc high/low doc lap (debounce rieng), GOP lai thanh 1 trong 3 trang
- * thai sach (du sach / lay 1 cuon / lay 2 cuon), tu do dieu khien 2 relay va bao trang thai
+ * thai sach (du sach / lay 1 cuon / lay 2 cuon). Relay1 luon ON, relay2 chay theo trang thai
+ * sach (ON khi da lay sach). Bao trang thai
  * qua MQTT + OSC (3 topic/dia chi rieng, 1 cho moi trang thai).
  *
  * Nguon ghep:
@@ -179,10 +180,10 @@ static void checkSensors() {
   else if (s1 != s2) newState = BOOK_STATE_ONE_TAKEN;
   else newState = BOOK_STATE_TWO_TAKEN;
 
-  // relay1 CHI on o trang thai du sach; relay2 on o ca 2 trang thai "da lay sach" (1 hoac 2
-  // cuon) va tiep tuc ON o trang thai lay 2 cuon, khong tu tat.
-  bool relay1Logic = (newState == BOOK_STATE_FULL);
-  bool relay2Logic = !relay1Logic;
+  // relay1 LUON ON (nguon/den nen, khong phu thuoc trang thai sach); relay2 on o ca 2 trang
+  // thai "da lay sach" (1 hoac 2 cuon) va tiep tuc ON o trang thai lay 2 cuon, khong tu tat.
+  bool relay1Logic = true;
+  bool relay2Logic = (newState != BOOK_STATE_FULL);
 
   // Nut Test: dao NGUOC tin hieu relay1/relay2 tam thoi de kiem tra day dien, bat ke trang
   // thai sach that. Khong dung vao bookState/relay*Logic ngoai xung test - het xung thi vong
