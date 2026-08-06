@@ -19,10 +19,10 @@
 // ======================================================================
 // PIN CONFIG
 // ======================================================================
-const uint8_t sensorPins[SENSOR_NUM] = {39, 40};
+const uint8_t sensorPins[SENSOR_NUM] = {40, 39};
 // 3 cap: cap0=relay1+2 (4,5), cap1=relay3+4 (6,16), cap2=relay5+6 (15,7). Xem RELAY_PAIR_NUM
 // trong globals.h.
-const uint8_t relayPins[RELAY_NUM] = {4, 5, 6, 16, 15, 7};
+const uint8_t relayPins[RELAY_NUM] = {5, 4, 16, 6, 7, 15};
 
 // ======================================================================
 // STATE / CONFIG
