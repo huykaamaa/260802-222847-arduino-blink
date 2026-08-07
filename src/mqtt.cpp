@@ -60,12 +60,8 @@ void mqttEvent(void *handler_args, esp_event_base_t base, int32_t event_id, void
 void mqttInit() {
   mqttConnected = false;
 
-  // Bo tick "Enable MQTT" = khong dung client len chut nao, thay vi de client cu ket noi/
-  // reconnect nen chi chan moi cho publish.
-  if (!mqttEnabled) {
-    LOG("MQTT disabled - khong khoi tao client");
-    return;
-  }
+  // KHONG chan theo mqttEnabled o day: bo tick "Enable MQTT" chi chan publish (xem
+  // triggerBookState()), client van ket noi toi broker nhu binh thuong.
   if (strlen(mqttServer) == 0) {
     LOG("MQTT: dia chi broker rong - khong khoi tao client");
     return;
