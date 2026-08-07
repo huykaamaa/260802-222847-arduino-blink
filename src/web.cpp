@@ -306,6 +306,17 @@ void handleTestRelay() {
 // requireAuth() o giua chung (header da xu ly xong).
 static bool otaAuthOk = false;
 
+// Reset mem board. Gui response TRUOC roi moi restart (giong handleUpdateFinish) - neu goi
+// ESP.restart() ngay thi trinh duyet chi thay ket noi bi cat, khong biet lenh da nhan chua.
+void handleReboot() {
+  if (!requireAuth()) return;
+  server.send(200, "text/html",
+    "<script>alert('Board dang khoi dong lai. Doi khoang 15-20 giay roi tai lai trang.');"
+    "setTimeout(function(){window.location.href='/';},10000);</script>");
+  delay(500); // cho response gui xong truoc khi reboot
+  ESP.restart();
+}
+
 void handleUpdateUpload() {
   HTTPUpload &upload = server.upload();
 
@@ -480,6 +491,6 @@ void loadConfig() {
   prefs.end();
 
   if (strcmp(authUser, "admin") == 0 && strcmp(authPass, "admin") == 0) {
-    LOG("AUTH: dang dung mac dinh admin/admin cho /save, /test_iot, /test_relay, /update - doi qua Web UI");
+    LOG("AUTH: dang dung mac dinh admin/admin cho /save, /test_iot, /test_relay, /update, /reboot - doi qua Web UI");
   }
 }

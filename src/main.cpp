@@ -306,6 +306,7 @@ void setup() {
   server.on("/test_iot", HTTP_POST, handleTestIot);
   server.on("/test_relay", HTTP_POST, handleTestRelay);
   server.on("/update", HTTP_POST, handleUpdateFinish, handleUpdateUpload);
+  server.on("/reboot", HTTP_POST, handleReboot);
   server.begin();
   oscUdp.begin(OSC_LOCAL_PORT);
 

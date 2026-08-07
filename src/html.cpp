@@ -178,6 +178,14 @@ void handleRoot() {
   html += "</form>";
   html += "</div>";
 
+  html += "<div class='panel'>";
+  html += "<h3>Khởi động lại</h3>";
+  html += "<div class='note'>Reset mềm board (như rút/cắm nguồn). Cấu hình đã lưu KHÔNG mất. Board mất khoảng 15-20 giây để lên mạng lại - nếu trang chưa tải được thì đợi thêm rồi F5.</div>";
+  html += "<form action='/reboot' method='POST' onsubmit=\"return confirm('Khởi động lại board? Relay và cảm biến ngưng vài chục giây - đừng bấm khi khách đang chơi.');\">";
+  html += "<input class='btn' type='submit' value='⟳ RESET ESP32'>";
+  html += "</form>";
+  html += "</div>";
+
   html += "</div></body></html>";
 
   server.send(200, "text/html", html);
