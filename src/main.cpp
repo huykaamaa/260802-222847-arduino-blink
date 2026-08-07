@@ -303,8 +303,7 @@ void setup() {
   server.on("/", HTTP_GET, handleRoot);
   server.on("/data", HTTP_GET, handleData);
   server.on("/save", HTTP_POST, handleSave);
-  server.on("/test_mqtt", HTTP_POST, handleTestMQTT);
-  server.on("/test_osc", HTTP_POST, handleTestOSC);
+  server.on("/test_iot", HTTP_POST, handleTestIot);
   server.on("/test_relay", HTTP_POST, handleTestRelay);
   server.on("/update", HTTP_POST, handleUpdateFinish, handleUpdateUpload);
   server.begin();

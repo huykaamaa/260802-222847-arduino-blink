@@ -4,7 +4,7 @@
 #include <cstring>
 #include <Update.h>
 
-// F6-style: gate state-changing endpoints (/save, /test_mqtt, /test_osc, /test_relay)
+// F6-style: gate state-changing endpoints (/save, /test_iot, /test_relay, /update)
 // behind HTTP Basic Auth. Root GET "/" va polling GET "/data" deliberately khong goi
 // ham nay (chi doc, gate se lam hong dashboard tu-refresh).
 static bool requireAuth() {
@@ -277,13 +277,12 @@ void updateTestSequence() {
   testSeqNextMs = millis() + TEST_SEQ_INTERVAL_MS;
 }
 
-void handleTestMQTT() {
-  if (!requireAuth()) return;
-  startTestSequence();
-  server.send(200, "text/html", "<script>window.location.href='/';</script>");
-}
-
-void handleTestOSC() {
+// MOT route duy nhat cho ca 2 kenh. Truoc day co /test_mqtt va /test_osc rieng nhung than ham
+// y het nhau tung chu (khong co ca dong LOG nao de phan biet), vi chuoi test goi
+// triggerBookState() - von ban CA MQTT LAN OSC. Hai nut rieng gay hieu nham la test duoc tung
+// kenh mot: dang soi "MQTT khong toi noi" ma bam Test MQTT roi thay ben nhan OSC phan hoi thi
+// rat de ket luan nham la MQTT on.
+void handleTestIot() {
   if (!requireAuth()) return;
   startTestSequence();
   server.send(200, "text/html", "<script>window.location.href='/';</script>");
@@ -481,6 +480,6 @@ void loadConfig() {
   prefs.end();
 
   if (strcmp(authUser, "admin") == 0 && strcmp(authPass, "admin") == 0) {
-    LOG("AUTH: dang dung mac dinh admin/admin cho /save, /test_mqtt, /test_osc, /test_relay - doi qua Web UI");
+    LOG("AUTH: dang dung mac dinh admin/admin cho /save, /test_iot, /test_relay, /update - doi qua Web UI");
   }
 }

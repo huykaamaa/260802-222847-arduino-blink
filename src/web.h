@@ -2,8 +2,9 @@
 
 void handleData();
 void handleSave();
-void handleTestMQTT();
-void handleTestOSC();
+// MOT route duy nhat cho ca 2 kenh: chuoi test goi triggerBookState(), von ban ca MQTT lan
+// OSC, nen 2 handler rieng truoc day co than ham y het nhau.
+void handleTestIot();
 void handleTestRelay();
 
 // OTA qua web: handleUpdateUpload() nhan tung chunk file trong luc dang upload (dang ky lam

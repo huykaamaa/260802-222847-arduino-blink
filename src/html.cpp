@@ -163,8 +163,10 @@ void handleRoot() {
 
   html += "<div class='panel'>";
   html += "<h3>Test Settings</h3>";
-  html += "<form action='/test_mqtt' method='POST' style='margin-bottom:10px;'><input class='btn' type='submit' value='Test MQTT (trạng thái 1→2→3)'></form>";
-  html += "<form action='/test_osc' method='POST'><input class='btn' type='submit' value='Test OSC (trạng thái 1→2→3)'></form>";
+  // Mot nut duy nhat: chuoi test goi triggerBookState(), von ban CA MQTT LAN OSC, nen 2 nut
+  // rieng truoc day chi gay hieu nham la test duoc tung kenh mot.
+  html += "<form action='/test_iot' method='POST'><input class='btn' type='submit' value='Test MQTT + OSC (trạng thái 1→2→3)'></form>";
+  html += "<div class='note'>Bắn lần lượt 3 trạng thái sách (đủ sách → lấy 1 cuốn → lấy 2 cuốn), cách nhau 1 giây, sau đó tự gửi lại trạng thái thật. MQTT và OSC đi cùng nhau, không tách riêng được.</div>";
   html += "</div>";
 
   html += "<div class='panel'>";
