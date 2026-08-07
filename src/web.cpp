@@ -15,7 +15,15 @@ static bool requireAuth() {
   return true;
 }
 
+// Chuoi PHAI la so thap phan thuan (khong dau, khong ky tu thua) va nam trong [minVal,maxVal].
+// Truoc day chi dua vao toInt(), von cat duoi cho chuoi lai ("8080xyz" -> 8080) va tra ve 0 cho
+// rac ("abc") - hien tai 2 cho goi deu co minVal = 1 nen rac bi loai, nhung bat ky caller moi
+// nao cho phep 0 se am tham nhan rac thanh so 0.
 static bool parseValidatedLong(const String &s, long minVal, long maxVal, long &out) {
+  if (s.length() == 0 || s.length() > 10) return false; // >10 chu so la chac chan tran long
+  for (size_t i = 0; i < s.length(); i++) {
+    if (!isdigit((unsigned char)s[i])) return false;
+  }
   long v = s.toInt();
   if (v < minVal || v > maxVal) return false;
   out = v;
@@ -62,6 +70,11 @@ static const char* bookStateLabel(int state) {
 
 void handleData() {
   String data;
+  // Trang dashboard poll route nay 2 lan/giay VINH VIEN khi co tab mo. Khong reserve() thi moi
+  // lan goi la mot chuoi realloc tang dan, bo lai block chet giua heap - dung cai nguy co phan
+  // manh ma globals.h vien dan de doi config sang char[].
+  data.reserve(1024);
+
   // Build timestamp cua chinh lan compile nay - de nhan biet OTA co that su nap ban moi khong
   // (build cu se hien gio/ngay cu tren dashboard sau khi reload).
   data += "<span style='font-size:12px;color:#94a3b8'>Firmware build: " __DATE__ " " __TIME__ "</span><br>";
@@ -330,7 +343,14 @@ void handleUpdateUpload() {
 // Chay SAU khi handleUpdateUpload() da nhan xong toan bo file (hoac tu choi tu dau vi sai
 // auth). Bao ket qua len trinh duyet roi tu reboot neu ghi flash thanh cong.
 void handleUpdateFinish() {
-  if (!otaAuthOk) {
+  // Reset ngay khi doc: otaAuthOk la static nen no song qua nhieu request. Mot POST /update
+  // KHONG kem file thi handleUpdateUpload() khong chay lan nao, va co se con giu gia tri cua
+  // lan OTA truoc. Khong khai thac duoc de ghi flash (chunk START luon authenticate() lai
+  // truoc khi ghi byte nao) nhung khong co ly do gi de co do song sot qua request.
+  bool authed = otaAuthOk;
+  otaAuthOk = false;
+
+  if (!authed) {
     server.requestAuthentication();
     return;
   }

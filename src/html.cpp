@@ -20,6 +20,10 @@ static String htmlEscape(const char *s) {
 
 void handleRoot() {
   String html;
+  // Trang nay dai ~11KB. Khong reserve() thi day la hon chuc lan realloc+memcpy tang dan moi
+  // lan mo trang, moi lan bo lai mot lo block chet giua heap.
+  html.reserve(12288);
+
   html += "<!DOCTYPE html><html><head>";
   html += "<meta charset='utf-8'>";
   html += "<meta name='viewport' content='width=device-width,initial-scale=1'>";

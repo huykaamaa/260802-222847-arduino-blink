@@ -35,6 +35,11 @@ bool eth_connected = false;
 
 // Diagnostic AP - phat wifi de doc IP ETH tren dien thoai, tu tat sau 5 phut
 static const unsigned long DIAG_AP_DURATION_MS = 5UL * 60UL * 1000UL;
+// Mat khau cho diag AP (truoc day AP nay MO hoan toan). SSID da lo dia chi IP noi bo cho moi
+// nguoi quanh phong quet thay, khong nen de bat ky ai cung vao thang duoc Web UI. Dung chung
+// "12121212" voi cac phong khac trong cum de operator chi phai nho mot cai. Luu y WPA2 yeu cau
+// toi thieu 8 ky tu - ngan hon thi softAP() se fail va mat luon duong vao nay.
+static const char *DIAG_AP_PASS = "12121212";
 bool diagApActive = false;
 unsigned long diagApStartMs = 0;
 
@@ -140,12 +145,12 @@ static void WiFiEvent(arduino_event_id_t event) {
   }
 }
 
-// Phat 1 AP mo (khong mat khau) co SSID chua IP hien tai cua ETH, de xem IP qua wifi tren
-// dien thoai thay vi phai mo Serial. Tu tat sau DIAG_AP_DURATION_MS (xu ly trong loop()).
+// Phat 1 AP co SSID chua IP hien tai cua ETH, de xem IP qua wifi tren dien thoai thay vi phai
+// mo Serial. Co mat khau DIAG_AP_PASS. Tu tat sau DIAG_AP_DURATION_MS (xu ly trong loop()).
 static void startDiagAp(bool isFallback) {
   String ssid = (isFallback ? "GIASACH-STATIC-" : "GIASACH-DHCP-") + ETH.localIP().toString();
   WiFi.mode(WIFI_AP);
-  if (WiFi.softAP(ssid.c_str())) {
+  if (WiFi.softAP(ssid.c_str(), DIAG_AP_PASS)) {
     diagApActive = true;
     diagApStartMs = millis();
     LOG("Diag AP: broadcasting %s", ssid.c_str());
