@@ -148,7 +148,7 @@ void handleRoot() {
   html += "<div class='single'><label>IP</label><input name='eth_ip' value='" + htmlEscape(ethStaticIp) + "'></div>";
   html += "<div class='single'><label>Gateway</label><input name='eth_gw' value='" + htmlEscape(ethStaticGateway) + "'></div>";
   html += "<div class='single'><label>Netmask</label><input name='eth_mask' value='" + htmlEscape(ethStaticNetmask) + "'></div>";
-  html += "<div class='note'>Bỏ tick: thiết bị thử DHCP trước (tối đa 10s lúc boot), chỉ dùng IP tĩnh khi DHCP thất bại. Tick: dùng IP tĩnh ngay từ đầu, bỏ qua DHCP hoàn toàn (boot nhanh hơn); nếu IP tĩnh nhập sai thì tự động lùi về DHCP. Đổi giá trị ở đây cần reboot board mới áp dụng.</div>";
+  html += "<div class='note'>Bỏ tick: thiết bị thử DHCP trước (tối đa 10s lúc boot), chỉ dùng IP tĩnh khi DHCP thất bại. Tick: dùng IP tĩnh ngay từ đầu, bỏ qua DHCP hoàn toàn (boot nhanh hơn). Sau khi áp IP tĩnh, board <b>ping thử gateway</b> — không có hồi đáp thì coi như IP nhập sai mạng và tự lùi về DHCP. Nếu router của bạn chặn ICMP thì board sẽ lùi về DHCP một cách không cần thiết (chỉ chậm thêm ~10s, vẫn quay lại đúng IP tĩnh này nếu DHCP cũng không lên). Đổi giá trị ở đây cần reboot board mới áp dụng.</div>";
   html += "</div>";
 
   html += "<div class='panel'>";
