@@ -13,6 +13,10 @@ void handleTestRelay();
 void handleUpdateUpload();
 void handleUpdateFinish();
 
+// OTA tu URL da luu (NVS "ota_url"): 2 nut cung form - "Luu URL" chi ghi NVS, "Nap tu link"
+// ghi NVS roi dat otaUrlPending de otaUrlTick() trong loop() tai ve. Xem globals.h.
+void handleUpdateUrl();
+
 // Reset mem board qua Web UI (ESP.restart()). Gated giong cac route doi trang thai khac.
 void handleReboot();
 

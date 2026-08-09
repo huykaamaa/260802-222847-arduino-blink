@@ -176,6 +176,16 @@ void handleRoot() {
   html += "<input type='file' name='firmware' accept='.bin' required style='width:100%;padding:10px;border:1px solid #bfc9d6;border-radius:8px;margin-bottom:8px;background:#fff'>";
   html += "<input class='btn' type='submit' value='Upload & Update'>";
   html += "</form>";
+  html += "<div class='note' style='margin-top:14px'><b>Hoặc nạp từ link:</b> board tự tải firmware.bin về từ URL đã lưu - tiện khi nạp nhiều board. Chỉ hỗ trợ <code>http://</code>, đặt file trên máy trong mạng LAN (ví dụ <code>python -m http.server 8000 -d C:/fw</code>). Phòng này dùng file <code>giasach.bin</code>.</div>";
+  // 2 nut cung form, phan biet bang name='act': dung <button> chu khong <input type=submit> vi
+  // <input> lay chinh nhan hien thi lam gia tri gui di, tuc nhan nut se phai la "update"/"save".
+  html += "<form action='/update_url' method='POST'>";
+  html += "<input name='ota_url' placeholder='http://192.168.99.187:8000/giasach.bin' value='";
+  html += htmlEscape(otaUrl);
+  html += "' style='width:100%;padding:10px;border:1px solid #bfc9d6;border-radius:8px;margin-bottom:8px;background:#fff'>";
+  html += "<button class='btn' type='submit' name='act' value='save' style='margin-top:0'>Lưu URL</button>";
+  html += "<button class='btn' type='submit' name='act' value='update' onclick=\"return confirm('Tải firmware từ link và nạp? Board sẽ khởi động lại sau khi xong.');\">Nạp từ link</button>";
+  html += "</form>";
   html += "</div>";
 
   html += "<div class='panel'>";

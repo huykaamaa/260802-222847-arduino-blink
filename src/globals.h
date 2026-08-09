@@ -106,6 +106,41 @@ extern int oscValueTwoTaken;
 extern char authUser[32];
 extern char authPass[32];
 
+// --- Ma nhan dang ban firmware dang chay (2026-08-10, port tu can_tim) -------------------
+// Tinh tu CHINH anh da nap (ESP.getSketchMD5()), khong phai tu macro __DATE__/__TIME__.
+// Ly do: PlatformIO chi bien dich lai file nao thay doi, nen dau thoi gian compile nam trong
+// web.cpp se giu nguyen gia tri CU neu lan build do chi sua html.cpp - tuc no sai dung luc can
+// no nhat, la luc kiem tra xem OTA da that su doi firmware chua. MD5 doc tu flash thi khong
+// bao gio noi doi: byte khac nhau la ma khac nhau.
+//
+// Tinh 1 lan trong setup() roi cache: getSketchMD5() phai doc het ~1.2MB flash, khong the goi
+// moi lan /data (dashboard poll lien tuc).
+extern char fwId[9];      // 8 ky tu dau cua MD5 sketch
+extern uint32_t fwSize;   // kich thuoc sketch (byte)
+void fwIdInit();
+
+// --- OTA tu URL (2026-08-10, port tu can_tim) --------------------------------------------
+// Thay vi chon file upload qua form, board TU TAI firmware.bin ve tu mot URL da luu san (NVS
+// key "ota_url") roi tu ghi flash va reboot. Tien khi phai nap nhieu board: bat mot HTTP server
+// trong LAN, moi board chi con mot nut bam.
+//
+// Ca 3 phong dung chung 1 server nhung KHAC TEN FILE (cantim.bin / giasach.bin / datthe.bin) -
+// xem tools/copy_fw.py, no tu copy sau moi lan build. Phong nay dung giasach.bin.
+//
+// CHI HO TRO http:// - https:// can NetworkClientSecure kem chung chi, ton them ~100KB flash va
+// them may kieu loi kho doan; trong mang show khep kin thi khong dang. handleUpdateUrl() TU CHOI
+// thang https:// ngay luc luu, thay vi de no that bai luc dang tai.
+//
+// BAO MAT: ai kiem soat duoc URL nay thi kiem soat duoc firmware cua board. Chi tro vao may
+// trong mang noi bo, dung tro ra Internet qua HTTP tran.
+extern char otaUrl[96];
+
+// Dat true tu handleUpdateUrl(); otaUrlTick() trong loop() moi thuc su tai. KHONG goi
+// httpUpdate.update() thang trong handler: no chan 10-30 giay roi reboot giua chung, response
+// chua kip ra khoi socket nen trinh duyet bao loi mang du update chay dung.
+extern bool otaUrlPending;
+void otaUrlTick();
+
 // ETH static-IP: mac dinh la fallback (chi dung khi DHCP khong len duoc). Neu
 // ethUseStaticFirst=true thi dung IP tinh ngay tu dau, bo qua cho DHCP (10s) hoan toan;
 // van tu dong lui ve DHCP neu IP tinh nhap sai/khong parse duoc.

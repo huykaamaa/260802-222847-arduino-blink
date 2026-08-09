@@ -15,6 +15,7 @@
 #include "mqtt.h"
 #include "web.h"
 #include "html.h"
+#include <HTTPUpdate.h>     // OTA tu URL - nam trong core Arduino-ESP32, khong phai lib ngoai
 #include "ping/ping_sock.h" // esp_ping - xac minh gateway co that su tra loi (xem gatewayReachable())
 
 // ======================================================================
@@ -76,6 +77,12 @@ int oscValueTwoTaken           = 1;
 // Admin auth
 char authUser[32] = "admin";
 char authPass[32] = "admin";
+
+// Xem globals.h
+char fwId[9] = "";
+uint32_t fwSize = 0;
+char otaUrl[96] = "";
+bool otaUrlPending = false;
 
 // ETH static-IP fallback
 char ethStaticIp[16]      = "192.168.99.200";
@@ -300,10 +307,79 @@ void resyncBookState() {
 // ======================================================================
 // SETUP / LOOP
 // ======================================================================
+// Xem globals.h. Goi 1 lan trong setup(); log ra Serial luon de doi chieu duoc voi dashboard
+// ma khong can mo trinh duyet.
+void fwIdInit()
+{
+  String md5 = ESP.getSketchMD5();
+  strncpy(fwId, md5.c_str(), sizeof(fwId) - 1);
+  fwId[sizeof(fwId) - 1] = '\0';
+  fwSize = ESP.getSketchSize();
+  LOG("FW: id=%s size=%u bytes", fwId, (unsigned)fwSize);
+}
+
+// Tai firmware tu otaUrl roi tu ghi flash + reboot. Xem globals.h ve ly do chi ho tro http://
+// va ve rui ro bao mat cua viec keo firmware tu URL.
+void otaUrlTick()
+{
+  // Cho them mot nhip sau khi handler dat co, roi moi tai. handleUpdateUrl() da goi
+  // server.send() nhung byte cuoi chua chac da roi khoi socket; nhay vao update ngay se chan
+  // loop ~20 giay roi reboot, trinh duyet mat ket noi va bao loi du update chay dung.
+  static bool armed = false;
+  static unsigned long armedAt = 0;
+  const unsigned long OTA_URL_SETTLE_MS = 500UL;
+
+  if (!otaUrlPending) {
+    armed = false;
+    return;
+  }
+  if (!armed) {
+    armed = true;
+    armedAt = millis();
+    return;
+  }
+  if (millis() - armedAt < OTA_URL_SETTLE_MS) {
+    return;
+  }
+
+  otaUrlPending = false;
+  armed = false;
+
+  if (otaUrl[0] == '\0') {
+    LOG("OTA URL: chua luu URL nao - bo qua");
+    return;
+  }
+
+  LOG(">>> OTA URL: bat dau tai %s <<<", otaUrl);
+
+  NetworkClient client;
+  httpUpdate.rebootOnUpdate(true);
+  // Server file tinh hay tra 301/302 (vd thieu dau / cuoi duong dan); khong bat theo redirect
+  // thi bao "HTTP error 302" rat kho doan ra nguyen nhan.
+  httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+
+  t_httpUpdate_return ret = httpUpdate.update(client, otaUrl);
+  switch (ret) {
+    case HTTP_UPDATE_OK:
+      // Thuc te khong bao gio in ra: rebootOnUpdate(true) restart ngay trong update().
+      LOG("OTA URL: xong - dang reboot");
+      break;
+    case HTTP_UPDATE_NO_UPDATES:
+      LOG("OTA URL: server khong tra ve firmware moi");
+      break;
+    case HTTP_UPDATE_FAILED:
+      LOG("OTA URL: THAT BAI (%d) %s", httpUpdate.getLastError(),
+          httpUpdate.getLastErrorString().c_str());
+      break;
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   unsigned long serialStart = millis();
   while (!Serial && (millis() - serialStart) < 2000) delay(10);
+
+  fwIdInit();
 
   for (int i = 0; i < SENSOR_NUM; i++) {
     pinMode(sensorPins[i], INPUT_PULLUP);
@@ -392,6 +468,7 @@ void setup() {
   server.on("/test_iot", HTTP_POST, handleTestIot);
   server.on("/test_relay", HTTP_POST, handleTestRelay);
   server.on("/update", HTTP_POST, handleUpdateFinish, handleUpdateUpload);
+  server.on("/update_url", HTTP_POST, handleUpdateUrl);
   server.on("/reboot", HTTP_POST, handleReboot);
   server.begin();
   oscUdp.begin(OSC_LOCAL_PORT);
@@ -424,4 +501,6 @@ void loop() {
     lastHeartbeatMs = millis();
     resyncBookState();
   }
+
+  otaUrlTick();  // CUOI loop: no chan ~10-30s roi reboot, dat truoc thi cac buoc tren bi treo theo
 }
