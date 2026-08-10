@@ -77,7 +77,11 @@ void handleData() {
 
   // Build timestamp cua chinh lan compile nay - de nhan biet OTA co that su nap ban moi khong
   // (build cu se hien gio/ngay cu tren dashboard sau khi reload).
-  data += "<span style='font-size:12px;color:#94a3b8'>Firmware build: " __DATE__ " " __TIME__ "</span><br>";
+  // BO dong "Firmware build: __DATE__ __TIME__" (2026-08-10). PlatformIO chi bien dich lai file
+  // nao thay doi, ma macro do nam trong web.cpp - lan build nao chi sua file khac thi web.cpp
+  // khong duoc dich lai va dau thoi gian DUNG YEN, trong khi firmware thi da doi. No noi doi
+  // dung luc duy nhat nguoi ta can no: kiem tra xem OTA da an chua. Dong "FW <md5>" o cuoi ham
+  // nay doc tu chinh anh dang chay nen khong bao gio sai - dung dong do.
   data += "<b>MQTT:</b> ";
   if (!mqttEnabled) data += "<span style='color:gray'>DISABLED</span>";
   else data += mqttConnected ? "<span style='color:green'>CONNECTED</span>" : "<span style='color:red'>DISCONNECTED</span>";
