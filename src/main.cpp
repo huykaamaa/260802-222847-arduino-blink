@@ -46,6 +46,16 @@ bool wifi_connected = false;
 // khong bao gio ket noi lai duoc.
 static bool wifiFallbackActive = false;
 
+// Da bat WiFi STA trong phien nay chua - dat true NGAY KHI quyet dinh dung WiFi, khong doi ket
+// noi thanh cong. Khac han wifiFallbackActive ("dang thuc su chay bang WiFi").
+//
+// Su khac biet nay la thu quyet dinh WiFi co duoc thu lai hay khong. Truoc day ca hai cho chon
+// che do radio deu doc wifiFallbackActive, nen khi lan ket noi dau THAT BAI thi startDiagAp()
+// dat WIFI_AP (tháo bo STA) roi 5 phut sau dat WIFI_OFF (tat han radio) - WiFi khong bao gio
+// duoc thu lai nua du mang co len tro lai. Canh de dinh nhat: board va router cam chung mot o,
+// bat cung luc, board khoi dong nhanh hon nen luc no thu thi AP chua kip phat song.
+static bool wifiStaActive = false;
+
 // ETH da tung len IP trong phien nay chua. ethUpAtBoot chot lai KET QUA CUA setup() va khong
 // bao gio doi nua - ethReturnTick() phai dua vao no chu khong phai vao trang thai song:
 // khi cam lai day, ETH tu xin DHCP va eth_connected bat len chi sau vai giay, neu doc trang
@@ -258,6 +268,7 @@ static bool wifiTryConnect() {
   }
 
   WiFi.mode(WIFI_STA);
+  wifiStaActive = true;  // tu day tro di radio phai duoc giu song - xem khai bao
 
   // PHAI config() TRUOC begin(): goi sau thi esp_netif da khoi dong DHCP client, bo IP tinh
   // khong duoc ap. Dung dung bo IP/gw/mask cua ETH - xem globals.h ve ly do dung chung.
@@ -289,7 +300,10 @@ static bool wifiTryConnect() {
   }
 
   if (WiFi.status() != WL_CONNECTED) {
-    LOG("WiFi: khong ket noi duoc sau %lu ms (status=%d) - kiem tra SSID/mat khau", WIFI_WAIT_MS, (int)WiFi.status());
+    // Khong tat STA o day: wifiRetryTick() se tiep tuc thu lai dinh ky. Router len cham hon
+    // board la chuyen thuong, khong co ly do gi de bo cuoc sau dung mot lan thu.
+    LOG("WiFi: khong ket noi duoc sau %lu ms (status=%d) - kiem tra SSID/mat khau, se tu thu lai dinh ky",
+        WIFI_WAIT_MS, (int)WiFi.status());
     return false;
   }
 
@@ -299,6 +313,39 @@ static bool wifiTryConnect() {
   wifiFallbackActive = true;
   LOG("WiFi: da ket noi - IP %s", WiFi.localIP().toString().c_str());
   return true;
+}
+
+// Thu ket noi WiFi lai theo chu ky, cho toi khi duoc. Goi moi vong loop().
+//
+// Khong dua vao mot minh setAutoReconnect(): co do xu ly viec RONG mat ket noi sau khi DA
+// associate duoc, con o day co the la chua bao gio associate lan nao (sai mat khau luc dau,
+// hoac AP chua phat song luc board thu). Mot lenh begin() moi la cach chac chan nhat.
+static void wifiRetryTick() {
+  const unsigned long WIFI_RETRY_MS = 60000UL;
+
+  if (!wifiStaActive) return;  // phien nay khong dung WiFi
+
+  if (wifi_connected) {
+    // Ket noi duoc o mot lan thu lai (khong phai o wifiTryConnect luc boot) - tu day board that
+    // su chay bang WiFi, cac cho khac doc co nay de biet dieu do.
+    if (!wifiFallbackActive) {
+      wifiFallbackActive = true;
+      LOG("WiFi: da ket noi o lan thu lai - IP %s", WiFi.localIP().toString().c_str());
+    }
+    return;
+  }
+
+  // ETH len duoc thi thoi, no la duong chinh. ethReturnTick() se lo viec quay ve ETH cho tu te.
+  if (eth_connected) return;
+
+  // Khoi tao bang millis() nen nhip dau tien cach lan thu trong setup() dung mot chu ky, khong
+  // ban ngay o vong loop() dau.
+  static unsigned long lastTry = millis();
+  if ((millis() - lastTry) < WIFI_RETRY_MS) return;
+  lastTry = millis();
+
+  LOG("WiFi: thu ket noi lai toi '%s'", wifiSsid);
+  WiFi.begin(wifiSsid, wifiPass[0] ? wifiPass : nullptr);
 }
 
 // ======================================================================
@@ -380,9 +427,10 @@ static void startDiagAp(const char *tag) {
   // dan "0.0.0.0" vao lam operator tuong day la mot dia chi that.
   String ssid = String("GIASACH-") + tag;
   if (netConnected()) ssid += "-" + netLocalIP().toString();
-  // Neu dang chay bang WiFi du phong thi PHAI la AP_STA: WIFI_AP thuan se tat luon STA, tu cat
-  // dut chinh duong mang vua ket noi duoc.
-  WiFi.mode(wifiFallbackActive ? WIFI_AP_STA : WIFI_AP);
+  // Da bat STA thi PHAI la AP_STA: WIFI_AP thuan se tat luon STA. Dieu kien la wifiStaActive
+  // chu khong phai wifiFallbackActive - neu chi giu STA khi da ket noi duoc thi truong hop
+  // "chua ket noi duoc, dang cho thu lai" se bi cat dut ngay tai day.
+  WiFi.mode(wifiStaActive ? WIFI_AP_STA : WIFI_AP);
   if (WiFi.softAP(ssid.c_str(), DIAG_AP_PASS)) {
     diagApActive = true;
     diagApStartMs = millis();
@@ -931,9 +979,9 @@ void loop() {
 
   if (diagApActive && (millis() - diagApStartMs) >= DIAG_AP_DURATION_MS) {
     WiFi.softAPdisconnect(true);
-    // WIFI_OFF chi khi khong dung WiFi lam duong mang chinh - neu dang chay fallback thi tat
-    // radio o day dong nghia voi tu ngat mang cua chinh minh sau 5 phut uptime.
-    WiFi.mode(wifiFallbackActive ? WIFI_STA : WIFI_OFF);
+    // WIFI_OFF chi khi phien nay khong dung toi WiFi. Da bat STA thi giu lai, ke ca khi chua
+    // ket noi duoc: tat radio o day la chot chan cuoi cung lam WiFi khong con co hoi nao nua.
+    WiFi.mode(wifiStaActive ? WIFI_STA : WIFI_OFF);
     diagApActive = false;
     LOG("Diag AP: turned off");
   }
@@ -944,6 +992,7 @@ void loop() {
   // Cap nhat o DAY chu khong trong netWatchdogTick(): ca hai ham duoi deu doc co nay, de viec
   // gan nam trong mot ham roi ham kia doc ke thi thu tu goi tro thanh mot rang buoc ngam.
   if (eth_connected) ethEverUp = true;
+  wifiRetryTick();
   netWatchdogTick();
   ethReturnTick();
 
