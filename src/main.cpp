@@ -16,6 +16,7 @@
 #include "web.h"
 #include "html.h"
 #include <HTTPUpdate.h>     // OTA tu URL - nam trong core Arduino-ESP32, khong phai lib ngoai
+#include <esp_ota_ops.h>    // trang thai anh OTA + xac nhan/rollback - xem otaRollbackTick()
 #include "ping/ping_sock.h" // esp_ping - xac minh gateway co that su tra loi (xem gatewayReachable())
 
 // ======================================================================
@@ -34,6 +35,60 @@ WebServer server(80);
 Preferences prefs;
 WiFiUDP oscUdp;
 bool eth_connected = false;
+bool wifi_connected = false;
+
+// Xem globals.h. ETH luon duoc uu tien; netLinkName() tra "ETH" khi ca hai cung len (thuc te
+// khong xay ra vi chi thu WiFi sau khi ETH that bai, tru khi cam lai day mang giua chung).
+// true tu luc WiFi du phong ket noi duoc lan dau. Khac wifi_connected o cho no KHONG tut ve
+// false khi song rot: cac cho phai quyet dinh "co duoc tat radio WiFi khong" (mode cua diag AP)
+// can biet "board nay dang song bang WiFi", chu khong phai "ngay giay nay co song hay khong" -
+// dung wifi_connected o do thi mot nhip mat song dung luc tat diag AP se tat luon radio va
+// khong bao gio ket noi lai duoc.
+static bool wifiFallbackActive = false;
+
+// ETH da tung len IP trong phien nay chua. ethUpAtBoot chot lai KET QUA CUA setup() va khong
+// bao gio doi nua - ethReturnTick() phai dua vao no chu khong phai vao trang thai song:
+// khi cam lai day, ETH tu xin DHCP va eth_connected bat len chi sau vai giay, neu doc trang
+// thai song thi dieu kien tu tat truoc khi kip reboot, tuc no se khong bao gio reboot.
+static bool ethUpAtBoot = false;
+static bool ethEverUp = false;
+
+// So lan da tu reboot vi mang, xem netWatchdogTick() / ethReturnTick(). Muc dich cua bo dem la
+// chan vong lap reboot, nen no BAT BUOC phai song qua ESP.restart() - bien thuong thi moi lan
+// reboot lai ve 0 va cai tran tro thanh vo nghia.
+//
+// PHAI la RTC_NOINIT_ATTR chu KHONG phai RTC_DATA_ATTR. Xem esp_attr.h: RTC_DATA_ATTR chi hua
+// giu gia tri "during a deep sleep / wake cycle" - no nam trong .rtc.data, von duoc bootloader
+// nap lai tu anh firmware o moi lan boot binh thuong (reset mem la mot lan boot binh thuong),
+// nen bo dem bi xoa sach. Chi .rtc_noinit moi duoc bo qua khi nap va giu nguyen "after restart".
+//
+// Gia phai tra cua noinit: luc CUP NGUON roi cam lai, vung nay chua RAC chu khong phai 0 - phai
+// co magic word de biet luc nao duoc phep tin bo dem.
+#define NET_REBOOT_MAGIC 0x47534831UL   // "GSH1" - doi gia tri nay neu doi y nghia cac bo dem
+RTC_NOINIT_ATTR static uint32_t netRebootMagic;
+RTC_NOINIT_ATTR static uint32_t netRebootCount;
+
+// De rieng chu khong dung chung bo dem voi netRebootCount: hai su kien nay noi tiep nhau trong
+// dung mot kich ban thuong gap (mat ETH -> reboot -> chay WiFi -> cam lai day -> reboot), dung
+// chung mot tran dem thi buoc thu hai bi chan boi chinh buoc thu nhat.
+RTC_NOINIT_ATTR static uint32_t ethReturnRebootCount;
+
+// Goi mot lan o dau setup(), TRUOC moi cho doc hai bo dem tren.
+static void netRebootCountersInit() {
+  if (netRebootMagic != NET_REBOOT_MAGIC) {
+    netRebootMagic = NET_REBOOT_MAGIC;
+    netRebootCount = 0;
+    ethReturnRebootCount = 0;
+    LOG("Net: khoi tao bo dem reboot (cup nguon hoac nap firmware moi)");
+  }
+}
+
+uint32_t netLossReboots() { return netRebootCount; }
+uint32_t ethReturnReboots() { return ethReturnRebootCount; }
+
+bool netConnected() { return eth_connected || wifi_connected; }
+IPAddress netLocalIP() { return eth_connected ? ETH.localIP() : WiFi.localIP(); }
+const char* netLinkName() { return eth_connected ? "ETH" : (wifi_connected ? "WiFi" : "-"); }
 
 // Diagnostic AP - phat wifi de doc IP ETH tren dien thoai, tu tat sau 5 phut
 static const unsigned long DIAG_AP_DURATION_MS = 5UL * 60UL * 1000UL;
@@ -90,6 +145,12 @@ char ethStaticGateway[16] = "192.168.99.1";
 char ethStaticNetmask[16] = "255.255.255.0";
 bool ethUseStaticFirst = false;
 
+// WiFi du phong - xem globals.h. Mac dinh TAT: bat len ma chua nhap SSID chi lam boot cham
+// them mot cach vo ich.
+bool wifiEnabled = false;
+char wifiSsid[33] = "";
+char wifiPass[64] = "";
+
 // Debounce dung chung cho ca 2 sensor
 unsigned long debounceTime = 500; // ms
 
@@ -125,6 +186,23 @@ bool relayTestActive() {
 }
 
 // ======================================================================
+// CHO DOI MA VAN CHAY SENSOR/RELAY
+// ======================================================================
+// Moi cho doi mang trong setup() deu phai dung ham nay thay cho delay(). Ly do: relay duoc dat
+// OFF het o dau setup(), va relay 1 theo thiet ke phai LUON ON - neu chan bang delay() tran thi
+// suot ca giai doan do mang (cho link + ping + DHCP + WiFi) relay 1 nam im o OFF va sensor
+// khong duoc doc lan nao, trong khi phan sensor/relay von chang lien quan gi toi mang.
+static void checkSensors();
+
+static void netDelay(unsigned long ms) {
+  unsigned long t0 = millis();
+  do {
+    checkSensors();
+    delay(5);
+  } while ((millis() - t0) < ms);
+}
+
+// ======================================================================
 // ETH EVENT
 // ======================================================================
 static void WiFiEvent(arduino_event_id_t event) {
@@ -148,9 +226,79 @@ static void WiFiEvent(arduino_event_id_t event) {
       LOG("ETH Stopped");
       eth_connected = false;
       break;
+
+    // WiFi du phong: chi co y nghia khi da roi vao nhanh fallback, nhung van bat su kien vo
+    // dieu kien - re hon la co them mot bien "dang o nhanh wifi" phai giu dong bo.
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      LOG("WiFi Got IP: %s", WiFi.localIP().toString().c_str());
+      wifi_connected = true;
+      break;
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      // Chi log lan DAU mat ket noi: WiFi.setAutoReconnect() ban su kien nay lai moi vai giay
+      // trong suot thoi gian router tat, do Serial ra hang nghin dong giong het nhau.
+      if (wifi_connected) LOG("WiFi Disconnected");
+      wifi_connected = false;
+      break;
     default:
       break;
   }
+}
+
+// ======================================================================
+// WIFI DU PHONG - chi goi khi ETH da that bai. Xem globals.h.
+// ======================================================================
+static bool wifiTryConnect() {
+  if (!wifiEnabled) {
+    LOG("WiFi: khong bat du phong WiFi - bo qua");
+    return false;
+  }
+  if (wifiSsid[0] == '\0') {
+    LOG("WiFi: da bat du phong nhung chua nhap SSID - bo qua");
+    return false;
+  }
+
+  WiFi.mode(WIFI_STA);
+
+  // PHAI config() TRUOC begin(): goi sau thi esp_netif da khoi dong DHCP client, bo IP tinh
+  // khong duoc ap. Dung dung bo IP/gw/mask cua ETH - xem globals.h ve ly do dung chung.
+  if (ethUseStaticFirst) {
+    IPAddress ip, gw, mask;
+    if (ip.fromString(ethStaticIp) && gw.fromString(ethStaticGateway) && mask.fromString(ethStaticNetmask)) {
+      if (WiFi.config(ip, gw, mask, gw)) { // gw lam DNS1, giong nhanh ETH
+        LOG("WiFi: dung IP tinh chung voi ETH - %s (gw %s, mask %s)", ethStaticIp, ethStaticGateway, ethStaticNetmask);
+      } else {
+        LOG("WiFi: WiFi.config() that bai - de WiFi xin DHCP");
+      }
+    } else {
+      LOG("WiFi: IP tinh khong parse duoc - de WiFi xin DHCP");
+    }
+  }
+
+  // Tu ket noi lai khi router chop nguon / song chap chon. Khong co dong nay thi mot lan rot
+  // song la mat mang vinh vien cho toi luc reboot.
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(false); // SSID/pass da nam trong NVS cua ta, khong can core ghi ban thu hai
+
+  LOG("WiFi: dang ket noi toi SSID '%s'...", wifiSsid);
+  WiFi.begin(wifiSsid, wifiPass[0] ? wifiPass : nullptr);
+
+  const unsigned long WIFI_WAIT_MS = 20000UL;
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && (millis() - t0) < WIFI_WAIT_MS) {
+    netDelay(100);
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    LOG("WiFi: khong ket noi duoc sau %lu ms (status=%d) - kiem tra SSID/mat khau", WIFI_WAIT_MS, (int)WiFi.status());
+    return false;
+  }
+
+  // Su kien GOT_IP thuong da chay xong truoc khi thoat vong tren, nhung voi IP tinh thi
+  // esp_netif khong ban GOT_IP theo cung nhip - set thang o day cho chac.
+  wifi_connected = true;
+  wifiFallbackActive = true;
+  LOG("WiFi: da ket noi - IP %s", WiFi.localIP().toString().c_str());
+  return true;
 }
 
 // ======================================================================
@@ -178,7 +326,7 @@ static bool gatewayReachable(IPAddress gw)
   const unsigned long LINK_WAIT_MS = 5000UL;
   unsigned long t0 = millis();
   while (!ETH.linkUp() && (millis() - t0) < LINK_WAIT_MS) {
-    delay(50);
+    netDelay(50);
   }
   if (!ETH.linkUp()) {
     // Khong co day mang thi DHCP cung chet, khong ket luan duoc gi - giu nguyen IP tinh.
@@ -217,7 +365,7 @@ static bool gatewayReachable(IPAddress gw)
   const unsigned long PING_TOTAL_MS = 4000UL;
   t0 = millis();
   while (!gwPingDone && (millis() - t0) < PING_TOTAL_MS) {
-    delay(20);
+    netDelay(20);
   }
   esp_ping_stop(hdl);
   esp_ping_delete_session(hdl);
@@ -227,9 +375,14 @@ static bool gatewayReachable(IPAddress gw)
 
 // Phat 1 AP co SSID chua IP hien tai cua ETH, de xem IP qua wifi tren dien thoai thay vi phai
 // mo Serial. Co mat khau DIAG_AP_PASS. Tu tat sau DIAG_AP_DURATION_MS (xu ly trong loop()).
-static void startDiagAp(bool isFallback) {
-  String ssid = (isFallback ? "GIASACH-STATIC-" : "GIASACH-DHCP-") + ETH.localIP().toString();
-  WiFi.mode(WIFI_AP);
+static void startDiagAp(const char *tag) {
+  // Khong co duong mang nao thi khong co IP de dan vao ten AP - de tran tag ("NOLINK"), dung
+  // dan "0.0.0.0" vao lam operator tuong day la mot dia chi that.
+  String ssid = String("GIASACH-") + tag;
+  if (netConnected()) ssid += "-" + netLocalIP().toString();
+  // Neu dang chay bang WiFi du phong thi PHAI la AP_STA: WIFI_AP thuan se tat luon STA, tu cat
+  // dut chinh duong mang vua ket noi duoc.
+  WiFi.mode(wifiFallbackActive ? WIFI_AP_STA : WIFI_AP);
   if (WiFi.softAP(ssid.c_str(), DIAG_AP_PASS)) {
     diagApActive = true;
     diagApStartMs = millis();
@@ -318,6 +471,79 @@ void fwIdInit()
   LOG("FW: id=%s size=%u bytes", fwId, (unsigned)fwSize);
 }
 
+// ======================================================================
+// OTA ROLLBACK GUARD - xem globals.h ve ly do ton tai
+// ======================================================================
+// Cua so chay thu. Ngan co chu dich: su co can bat la "firmware moi chet ngay khi khoi dong",
+// von lo ra trong vai giay dau. Keo dai cua so ra chi lam tang kha nang mot lan CUP NGUON binh
+// thuong bi hieu nham thanh that bai va lam board lui ve ban cu mot cach oan uong. 60 giay du
+// de qua het setup() (cho mang toi ~40s o truong hop xau) cong them mot doan loop() that su.
+static const unsigned long OTA_CONFIRM_MS = 60000UL;
+
+// Ghi de weak symbol trong core (esp32-hal-misc.c). PHAI la extern "C": ben do la file .c nen
+// symbol khong bi mangle, dinh nghia kieu C++ se khong ghi de duoc ma tao ra mot symbol khac.
+// Tra ve true = "khoan xac nhan", initArduino() se khong tu goi
+// esp_ota_mark_app_valid_cancel_rollback() nua ma de viec do cho otaRollbackTick().
+extern "C" bool verifyRollbackLater() { return true; }
+
+static bool otaPending = false;    // anh dang chay o trang thai PENDING_VERIFY
+static bool otaConfirmed = false;  // da tu xac nhan xong
+static bool otaConfirmStarted = false;
+static unsigned long otaConfirmT0 = 0;
+
+bool otaPendingVerify() { return otaPending && !otaConfirmed; }
+
+// Con bao nhieu giay nua thi xac nhan. Dung cho thong bao tren Web UI - trong cua so nay moi
+// thao tac OTA deu bi SDK tu choi (xem handleUpdateUrl), nen phai noi duoc cho nguoi dung biet
+// con phai doi bao lau thay vi chi bao "khong duoc".
+uint32_t otaConfirmRemainSec() {
+  if (!otaPendingVerify()) return 0;
+  if (!otaConfirmStarted) return OTA_CONFIRM_MS / 1000UL;
+  unsigned long elapsed = millis() - otaConfirmT0;
+  if (elapsed >= OTA_CONFIRM_MS) return 0;
+  return (uint32_t)((OTA_CONFIRM_MS - elapsed + 999UL) / 1000UL);
+}
+
+void otaRollbackInit() {
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  esp_ota_img_states_t state;
+  if (!running || esp_ota_get_state_partition(running, &state) != ESP_OK) {
+    // Doc khong duoc trang thai thi coi nhu khong co gi de xac nhan. Khong tu dat otaPending =
+    // true o day: lam vay se goi mark_app_valid() vo co tren mot anh nap bang USB (von khong
+    // nam trong quy trinh OTA), gay nhieu hon la loi ich.
+    LOG("OTA: khong doc duoc trang thai anh dang chay - bo qua buoc xac nhan");
+    return;
+  }
+  if (state != ESP_OTA_IMG_PENDING_VERIFY) return;  // anh cu, da xac nhan tu lan boot truoc
+
+  otaPending = true;
+  LOG("OTA: firmware nay dang CHAY THU - se tu xac nhan sau %lu giay chay lien tuc. "
+      "Neu no chet hoac bi cup nguon truoc do, lan boot sau bootloader tu lui ve ban cu.",
+      OTA_CONFIRM_MS / 1000UL);
+}
+
+void otaRollbackTick() {
+  if (!otaPending || otaConfirmed) return;
+
+  // Bat dau dem o LAN GOI DAU TIEN, tuc vong loop() dau tien - khong phai luc boot. Chu dich la
+  // dem thoi gian thuc su chay binh thuong, khong tinh ca doan setup() ngoi cho mang.
+  if (!otaConfirmStarted) {
+    otaConfirmStarted = true;
+    otaConfirmT0 = millis();
+  }
+  if ((millis() - otaConfirmT0) < OTA_CONFIRM_MS) return;
+
+  esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+  if (err == ESP_OK) {
+    otaConfirmed = true;
+    LOG("OTA: da xac nhan firmware nay chay tot - se khong lui ve ban cu nua");
+  } else {
+    // Thu lai o vong sau. Khong dat otaConfirmed de tranh mac ket vinh vien o trang thai chay
+    // thu neu day chi la mot loi nhat thoi.
+    LOG("OTA: xac nhan that bai (err=%d) - se thu lai", (int)err);
+  }
+}
+
 // Tai firmware tu otaUrl roi tu ghi flash + reboot. Xem globals.h ve ly do chi ho tro http://
 // va ve rui ro bao mat cua viec keo firmware tu URL.
 void otaUrlTick()
@@ -380,6 +606,8 @@ void setup() {
   while (!Serial && (millis() - serialStart) < 2000) delay(10);
 
   fwIdInit();
+  netRebootCountersInit();
+  otaRollbackInit();
 
   for (int i = 0; i < SENSOR_NUM; i++) {
     pinMode(sensorPins[i], INPUT_PULLUP);
@@ -397,12 +625,43 @@ void setup() {
     LOG("ETH Failed");
   }
 
+  // Mo socket OSC o DAY, khong som hon va khong muon hon.
+  //
+  // Khong duoc som hon: mo socket doi hoi lwIP da duoc dung len, ma viec do chi xay ra ben
+  // trong ETH.begin() (no goi Network.begin()). Goi truoc do thi lwIP lay mot semaphore NULL va
+  // board chet ngay o setup(): "assert failed: xQueueSemaphoreTake queue.c:1709" roi reboot -
+  // lap vo tan vi lan boot nao cung chet o dung cho do.
+  //
+  // Khong duoc muon hon (truoc day no nam sau server.begin()): netDelay() trong giai doan cho
+  // mang ben duoi da chay checkSensors(), va lan xac dinh trang thai sach dau tien goi thang
+  // sang triggerBookState() -> sendOscAt(). NetworkUDP::beginPacket() KHONG tu mo socket, viec
+  // do nam o endPacket(), nen cue OSC dau tien se ban vao socket chua mo.
+  oscUdp.begin(OSC_LOCAL_PORT);
+
+  // Toan bo giai doan "thu ETH" bi chan trong 20 giay - het thoi gian do ma van chua co IP thi
+  // chuyen sang WiFi du phong (neu co bat). Deadline tinh mot lan o day de moi buoc ben duoi
+  // (cho link, cho DHCP) deu an chung mot ngan sach thoi gian, khong cong don thanh vai phut.
+  const unsigned long ETH_TOTAL_WAIT_MS = 20000UL;
+  const unsigned long ethDeadline = millis() + ETH_TOTAL_WAIT_MS;
+
   bool usedFallback = false;
+
+  // Cho LINK Ethernet truoc moi lam gi khac. Truoc day khong co buoc nay: khi rut day mang,
+  // nhanh "static fallback" ben duoi van ap IP tinh thanh cong va dat eth_connected = true, nen
+  // board tuong minh dang o tren mang du chang noi voi ai duoc - va nhu the thi nhanh WiFi se
+  // KHONG BAO GIO chay. Khong co link = khong co Ethernet, du IP dep den may.
+  bool ethLinkUp = false;
+  while (!(ethLinkUp = ETH.linkUp()) && (long)(ethDeadline - millis()) > 0) {
+    netDelay(100);
+  }
+  if (!ethLinkUp) {
+    LOG("ETH: khong co link sau %lu ms (chua cam day mang?) - chuyen sang WiFi du phong", ETH_TOTAL_WAIT_MS);
+  }
 
   // Uu tien IP tinh: ap dung ngay, bo qua hoan toan cho DHCP (boot nhanh hon, dung khi mang
   // khong co DHCP server hoac muon IP co dinh chac chan). Ap xong PHAI ping gateway de xac
   // minh bo IP nay thuc su noi chuyen duoc voi mang - xem gatewayReachable() ve ly do.
-  if (ethUseStaticFirst) {
+  if (ethLinkUp && ethUseStaticFirst) {
     IPAddress ip, gw, mask;
     if (ip.fromString(ethStaticIp) && gw.fromString(ethStaticGateway) && mask.fromString(ethStaticNetmask)) {
       // Truyen gateway lam DNS1: ETH.config() 3 tham so de DNS trong, nen neu MQTT broker
@@ -432,11 +691,13 @@ void setup() {
     }
   }
 
-  if (!eth_connected) {
+  if (ethLinkUp && !eth_connected) {
+    // Cho DHCP 10s nhu cu, nhung khong duoc vuot qua ngan sach 1 phut cua ca giai doan ETH
+    // (nhanh uu tien-IP-tinh phia tren co the da an mat vai giay cho link + ping gateway).
     const unsigned long ETH_WAIT_MS = 10000UL;
     unsigned long ethStart = millis();
-    while (!eth_connected && (millis() - ethStart) < ETH_WAIT_MS) {
-      delay(100);
+    while (!eth_connected && (millis() - ethStart) < ETH_WAIT_MS && (long)(ethDeadline - millis()) > 0) {
+      netDelay(100);
     }
 
     if (!eth_connected) {
@@ -456,10 +717,26 @@ void setup() {
     }
   }
 
-  if (eth_connected) {
-    startDiagAp(usedFallback);
+  // Het duong ETH ma van chua co IP -> thu WiFi. Day la duong DU PHONG, khong phai duong song
+  // song: neu ETH da len thi khong dung toi WiFi de khoi phai chon xem MQTT/OSC di loi nao.
+  if (!eth_connected) {
+    wifiTryConnect();
+  }
+
+  // Chot lai ket qua cua ca giai doan tren - xem giai thich o cho khai bao ethUpAtBoot.
+  ethUpAtBoot = eth_connected;
+  ethEverUp = eth_connected;
+
+  if (netConnected()) {
+    startDiagAp(eth_connected ? (usedFallback ? "STATIC" : "DHCP") : "WIFI");
   } else {
-    LOG("ETH khong co IP - khong the phat diag AP, chi con Serial de debug");
+    // Van phat diag AP du khong co mang: day la duong vao Web UI cuoi cung con lai (noi vao AP
+    // roi mo http://192.168.4.1) de con sua duoc SSID/IP tinh ma khong phai cam laptop + Serial
+    // vao tan noi. Truoc day truong hop nay tu co Web UI vi nhanh static fallback dat
+    // eth_connected = true ke ca khi rut day mang - gio nhanh do da bi chan (xem tren) nen
+    // phai phat AP mot cach co chu dich.
+    LOG("Khong co IP tren ca ETH lan WiFi - phat diag AP de con vao Web UI qua 192.168.4.1");
+    startDiagAp("NOLINK");
   }
 
   server.on("/", HTTP_GET, handleRoot);
@@ -471,26 +748,204 @@ void setup() {
   server.on("/update_url", HTTP_POST, handleUpdateUrl);
   server.on("/reboot", HTTP_POST, handleReboot);
   server.begin();
-  oscUdp.begin(OSC_LOCAL_PORT);
 
   mqttInit();
   LOG("HTTP Server Started");
 }
 
-void loop() {
+// ======================================================================
+// NET WATCHDOG - mat ETH qua lau thi tu reboot de di lai luong boot (cho ETH 1 phut -> WiFi)
+// ======================================================================
+// Ly do ton tai: wifiTryConnect() chi chay trong setup(), nen mat ETH GIUA CHUNG khong tu keo
+// WiFi len duoc - board se nam im khong mang cho toi khi co nguoi toi rut nguon. Reboot la cach
+// re nhat de dung lai chinh cai luong da co ma khong phai xu ly hai netif song song, MQTT bam
+// netif nao, diag AP da tat thi bat lai kieu gi.
+//
+// Gia phai tra: relay + sensor ngung vai giay moi lan reboot. Vi the co 6 chot chan de no chi
+// no ra khi that su co loi va that su co cho de lui ve:
+static void netWatchdogTick() {
+  const unsigned long NET_LOST_REBOOT_MS = 60000UL;  // mat ETH lien tuc bao lau thi reboot
+  const unsigned long NET_OK_CLEAR_MS    = 60000UL;  // mang lanh lien tuc bao lau thi xoa bo dem
+  const uint32_t NET_REBOOT_MAX = 1;                 // toi da bao nhieu lan reboot lien tiep
+
+  static unsigned long netLostSince = 0;
+  static unsigned long netOkSince = 0;
+  static bool loggedNeverUp = false;
+  static bool loggedNoWifi = false;
+  static bool loggedGaveUp = false;
+
+  // (1) Dang chay bang WiFi du phong: ETH tat la trang thai BINH THUONG o day, khong phai su
+  // co. Reboot khong dua ta di dau ngoai viec cat mang cua chinh minh them 20 giay.
+  if (wifiFallbackActive) return;
+
+  // (2) ETH CHUA BAO GIO len trong phien nay: watchdog sinh ra de cuu tinh huong "dang chay thi
+  // mat mang". Con neu boot len da khong co ETH thi setup() vua chay tron ven chuoi cho-ETH-1-
+  // phut -> thu-WiFi roi, reboot lai chi la lam y het them lan nua, khong co gi moi - doi lai
+  // thi cat mat diag AP dung luc no la duong vao duy nhat con lai de sua cau hinh.
+  if (!ethEverUp) {
+    if (!loggedNeverUp) {
+      LOG("Net watchdog: ETH chua len lan nao trong phien nay - watchdog dung yen (setup() da thu du ETH -> WiFi)");
+      loggedNeverUp = true;
+    }
+    return;
+  }
+
+  // (3) Co may DANG NOI vao diag AP: nhieu kha nang operator dang go lai SSID/IP tinh ngay luc
+  // nay - reboot giua chung la pha hoai. Chi hoan khi that su co nguoi noi vao, KHONG hoan chi
+  // vi AP dang bat: AP phat 5 phut moi lan boot, lay "AP bat" lam dieu kien thi watchdog cam
+  // suot 5 phut dau ke ca khi khong ai dung toi no.
+  if (diagApActive && WiFi.softAPgetStationNum() > 0) return;
+
   if (eth_connected) {
+    netLostSince = 0;
+    if (netOkSince == 0) {
+      netOkSince = millis();
+    } else if (netRebootCount > 0 && (millis() - netOkSince) >= NET_OK_CLEAR_MS) {
+      // Mang da lanh lai va tru duoc 1 phut - coi nhu su co truoc do da qua, tra bo dem ve 0 de
+      // lan hong SAU van con quyen reboot. Khong co dong nay thi mot su co duy nhat luc 9 gio
+      // sang lam tat watchdog cho het ngay.
+      LOG("Net watchdog: ETH on dinh tro lai - xoa bo dem reboot");
+      netRebootCount = 0;
+      ethReturnRebootCount = 0;
+      loggedNoWifi = false;
+      loggedGaveUp = false;
+    }
+    return;
+  }
+
+  netOkSince = 0;
+
+  if (netLostSince == 0) {
+    netLostSince = millis();
+    LOG("Net watchdog: mat ETH - se tu reboot neu khong co lai trong %lu giay", NET_LOST_REBOOT_MS / 1000UL);
+    return;
+  }
+  if ((millis() - netLostSince) < NET_LOST_REBOOT_MS) return;
+
+  // (4) Dang tai firmware tu URL: reboot vao giua se de lai mot ban firmware ghi do dang.
+  if (otaUrlPending) return;
+
+  // (5) Firmware nay CHUA duoc xac nhan (vua OTA xong, dang trong cua so chay thu): mot cu
+  // reset o day se bi bootloader hieu la "ban moi that bai" va LUI VE BAN CU. Tuc watchdog se
+  // am tham huy dung cai firmware vua nap - va lap lai y het o moi lan OTA sau. Cho xac nhan
+  // xong roi reboot; cham nhat la doi them 60 giay.
+  if (otaPendingVerify()) return;
+
+  // (6) Khong cau hinh WiFi du phong thi reboot la vo nghia: boot lai cung chi ra dung trang
+  // thai khong mang nay, doi lai relay ngung 20 giay moi 2 phut. Tha nam im con hon.
+  if (!wifiEnabled || wifiSsid[0] == '\0') {
+    if (!loggedNoWifi) {
+      LOG("Net watchdog: mat ETH nhung chua cau hinh WiFi du phong - khong reboot (reboot cung khong co cho de lui ve)");
+      loggedNoWifi = true;
+    }
+    return;
+  }
+
+  if (netRebootCount >= NET_REBOOT_MAX) {
+    if (!loggedGaveUp) {
+      LOG("Net watchdog: da reboot %u lan ma van khong co mang - thoi, khong reboot nua (relay/sensor van chay). Cup nguon de dat lai bo dem.", (unsigned)netRebootCount);
+      loggedGaveUp = true;
+    }
+    return;
+  }
+
+  netRebootCount++;
+  LOG(">>> Net watchdog: mat ETH qua %lu giay - reboot lan %u de thu WiFi du phong <<<",
+      NET_LOST_REBOOT_MS / 1000UL, (unsigned)netRebootCount);
+  delay(200); // cho dong log tren ra het khoi UART truoc khi cat dien
+  ESP.restart();
+}
+
+// ======================================================================
+// ETH QUAY LAI trong luc dang chay WiFi du phong -> reboot de ve lai ETH (dung IP tinh)
+// ======================================================================
+// Neu khong co ham nay: luc boot khong co link thi ca khoi ETH.config() lan khoi cho DHCP deu
+// bi bo qua, nen netif ETH van nam o che do DHCP MAC DINH. Cam lai day giua chung la no lang le
+// xin DHCP va bat len bang mot IP la - dung luc operator dang mong doi dung cai IP tinh da cau
+// hinh. Te hon nua la luc do hai netif cung song voi hai dia chi khac nhau, ETH lai co do uu
+// tien dinh tuyen cao hon WiFi, nen luong ra ngoai am tham doi duong ma khong bao gi.
+//
+// Sua bang cach ap IP tinh cho ETH ngay tu luc boot (khi chua co link) thi KHONG duoc: WiFi du
+// phong dang giu dung dia chi do roi, hai netif cung mot IP tren cung mot lop 2 = xung dot ARP.
+// Reboot la cach sach nhat: setup() chay lai voi day da cam san, di dung nhanh uu tien IP tinh,
+// va WiFi khong bao gio duoc bat len.
+static void ethReturnTick() {
+  const unsigned long ETH_LINK_STABLE_MS = 15000UL; // link phai on dinh bao lau moi tinh la "da cam lai"
+  const uint32_t ETH_RETURN_REBOOT_MAX = 2;
+
+  static unsigned long linkUpSince = 0;
+  static bool loggedGaveUp = false;
+
+  // Chi co y nghia khi setup() KET THUC MA ETH KHONG LEN - bao gom ca hai nhanh: dang chay WiFi
+  // du phong, VA dang chay khong co mang nao ca (NOLINK). Truoc day dieu kien la
+  // "wifiFallbackActive" nen bo sot han nhanh NOLINK: board boot khi chua cam day va WiFi cung
+  // hong, sau do cam day vao thi khong ai phat hien, netif ETH lang le xin DHCP va len bang mot
+  // IP la - dung cai ma cau hinh "uu tien IP tinh" noi rang no se khong lam.
+  if (ethUpAtBoot) return;
+  if (otaUrlPending) return;
+
+  // Nhu chot (5) cua netWatchdogTick(): reboot trong cua so chay thu = bootloader lui ve ban cu,
+  // tuc tu huy chinh firmware vua nap.
+  if (otaPendingVerify()) return;
+
+  if (!ETH.linkUp()) {
+    linkUpSince = 0;
+    return;
+  }
+
+  // Doi link on dinh thay vi reboot ngay khi thay link: day mang long chan hay chop tat lien
+  // tuc, phan ung tuc thi se thanh mot chuoi reboot lien mien.
+  if (linkUpSince == 0) {
+    linkUpSince = millis();
+    LOG("ETH co link tro lai - neu on dinh %lu giay se reboot de quay ve ETH voi IP tinh",
+        ETH_LINK_STABLE_MS / 1000UL);
+    return;
+  }
+  if ((millis() - linkUpSince) < ETH_LINK_STABLE_MS) return;
+
+  // Giong netWatchdogTick(): dung cat ngang luc co nguoi dang cau hinh qua diag AP.
+  if (diagApActive && WiFi.softAPgetStationNum() > 0) return;
+
+  if (ethReturnRebootCount >= ETH_RETURN_REBOOT_MAX) {
+    if (!loggedGaveUp) {
+      LOG("ETH quay lai lan thu %u ma van khong tru duoc - thoi, o lai WiFi (cup nguon de dat lai bo dem)",
+          (unsigned)ethReturnRebootCount);
+      loggedGaveUp = true;
+    }
+    return;
+  }
+
+  ethReturnRebootCount++;
+  LOG(">>> ETH da cam lai va on dinh - reboot de quay ve ETH voi IP tinh (lan %u) <<<",
+      (unsigned)ethReturnRebootCount);
+  delay(200); // cho dong log ra het khoi UART truoc khi cat dien
+  ESP.restart();
+}
+
+void loop() {
+  // "|| diagApActive": khi ca ETH lan WiFi deu chet, diag AP la duong duy nhat vao Web UI
+  // (http://192.168.4.1) - khong phuc vu HTTP o day thi cai AP do vo dung.
+  if (netConnected() || diagApActive) {
     server.handleClient();
   }
 
   if (diagApActive && (millis() - diagApStartMs) >= DIAG_AP_DURATION_MS) {
     WiFi.softAPdisconnect(true);
-    WiFi.mode(WIFI_OFF);
+    // WIFI_OFF chi khi khong dung WiFi lam duong mang chinh - neu dang chay fallback thi tat
+    // radio o day dong nghia voi tu ngat mang cua chinh minh sau 5 phut uptime.
+    WiFi.mode(wifiFallbackActive ? WIFI_STA : WIFI_OFF);
     diagApActive = false;
     LOG("Diag AP: turned off");
   }
 
   updateTestSequence();
   checkSensors();
+
+  // Cap nhat o DAY chu khong trong netWatchdogTick(): ca hai ham duoi deu doc co nay, de viec
+  // gan nam trong mot ham roi ham kia doc ke thi thu tu goi tro thanh mot rang buoc ngam.
+  if (eth_connected) ethEverUp = true;
+  netWatchdogTick();
+  ethReturnTick();
 
   // Khoi tao bang millis() (chay dung 1 lan) chu khong phai 0: uptime luc vao loop() da ~12s
   // (cho Serial + cho DHCP), nen voi chu ky heartbeat ngan (min 5s) moc 0 se lam nhip dau ban
@@ -501,6 +956,8 @@ void loop() {
     lastHeartbeatMs = millis();
     resyncBookState();
   }
+
+  otaRollbackTick();
 
   otaUrlTick();  // CUOI loop: no chan ~10-30s roi reboot, dat truoc thi cac buoc tren bi treo theo
 }

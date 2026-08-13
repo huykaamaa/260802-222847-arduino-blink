@@ -73,7 +73,9 @@ void handleData() {
   // Trang dashboard poll route nay 2 lan/giay VINH VIEN khi co tab mo. Khong reserve() thi moi
   // lan goi la mot chuoi realloc tang dan, bo lai block chet giua heap - dung cai nguy co phan
   // manh ma globals.h vien dan de doi config sang char[].
-  data.reserve(1024);
+  // 2048: do dem thuc te chuoi tinh trong ham nay da ~1.4KB, chua ke phan dong. reserve(1024)
+  // truoc day khong con du - tuc no dang realloc dung cai viec ma no sinh ra de tranh.
+  data.reserve(2048);
 
   // Build timestamp cua chinh lan compile nay - de nhan biet OTA co that su nap ban moi khong
   // (build cu se hien gio/ngay cu tren dashboard sau khi reload).
@@ -87,6 +89,27 @@ void handleData() {
   else data += mqttConnected ? "<span style='color:green'>CONNECTED</span>" : "<span style='color:red'>DISCONNECTED</span>";
   data += "<br><b>OSC:</b> ";
   data += oscEnabled ? "<span style='color:green'>ENABLED</span>" : "<span style='color:gray'>DISABLED</span>";
+
+  // Duong mang dang dung: quan trong voi ca cum vi WiFi la duong DU PHONG - thay dong nay bao
+  // "WiFi" nghia la day mang cua board dang co van de, can di kiem tra truoc buoi dien chu
+  // khong phai doi den luc no rot not.
+  data += "<br><b>Mạng:</b> ";
+  if (!netConnected()) {
+    data += "<span style='color:red'>KHÔNG CÓ IP</span>";
+  } else if (eth_connected) {
+    data += "<span style='color:green'>ETH</span> " + netLocalIP().toString();
+  } else {
+    data += "<span style='color:orange;font-weight:bold'>WiFi (dự phòng)</span> " + netLocalIP().toString();
+    data += " &middot; RSSI " + String(WiFi.RSSI()) + " dBm";
+  }
+  // Tach 2 nguyên nhân: gộp chung thì người đọc suy ra sai nguồn cơn (mất mạng vs. cắm lại dây).
+  if (netLossReboots() > 0 || ethReturnReboots() > 0) {
+    data += "<br><span style='color:#b45309'>⚠ Đã tự reboot";
+    if (netLossReboots() > 0) data += " " + String(netLossReboots()) + " lần vì mất ETH";
+    if (netLossReboots() > 0 && ethReturnReboots() > 0) data += ",";
+    if (ethReturnReboots() > 0) data += " " + String(ethReturnReboots()) + " lần vì cắm lại ETH";
+    data += " (đếm từ lần cắm điện gần nhất)</span>";
+  }
   data += "<br><br>";
 
   data += "<b>Trạng thái:</b> ";
@@ -118,6 +141,14 @@ void handleData() {
   data += "<div style='margin-top:8px;font-size:12px;color:#64748b'>FW <b>";
   data += fwId;
   data += "</b> &middot; " + String(fwSize) + " bytes</div>";
+
+  // Canh bao trong cua so chay thu: day la luc DUY NHAT ma mot cu cup nguon se lam board lui ve
+  // firmware cu. Operator can biet de doi them mot phut truoc khi rut dien.
+  if (otaPendingVerify()) {
+    data += "<div style='margin-top:4px;font-size:12px;color:#b45309'>⏳ Firmware mới đang "
+            "<b>chạy thử</b> - chưa xác nhận. Đừng cúp nguồn lúc này, nếu không board sẽ tự quay "
+            "về bản cũ.</div>";
+  }
 
   server.send(200, "text/html", data);
 }
@@ -222,6 +253,27 @@ void handleSave() {
   saveIpArg("eth_gw", ethStaticGateway, sizeof(ethStaticGateway), ethAddrInvalid);
   saveIpArg("eth_mask", ethStaticNetmask, sizeof(ethStaticNetmask), ethAddrInvalid);
 
+  wifiEnabled = server.hasArg("wifi_enable");
+
+  // SSID dai hon buffer thi strncpy cat cut am tham va board se di tim mot ten mang khong ton
+  // tai - hong theo kieu kho doan nhat. Bao thang len UI thay vi luu mot gia tri sai.
+  bool wifiSsidTooLong = server.hasArg("wifi_ssid") &&
+                         server.arg("wifi_ssid").length() >= sizeof(wifiSsid);
+  if (wifiSsidTooLong) {
+    LOG("WiFi: SSID dai %u ky tu, toi da %u - khong luu",
+        (unsigned)server.arg("wifi_ssid").length(), (unsigned)(sizeof(wifiSsid) - 1));
+  }
+  // SSID de trong = giu nguyen (saveStringArg bo qua chuoi rong). Mat khau cung vay - form
+  // khong do mat khau WiFi ra HTML, giong mqtt_pass/auth_pass, vi "/" khong yeu cau dang nhap.
+  if (!wifiSsidTooLong) saveStringArg("wifi_ssid", wifiSsid, sizeof(wifiSsid));
+  // Rieng WiFi pass co them nut xoa trang: mang mo (khong mat khau) la cau hinh hop le, ma
+  // "de trong = giu nguyen" thi khong con cach nao go mat khau cu ra.
+  if (server.hasArg("wifi_pass_clear")) {
+    wifiPass[0] = '\0';
+  } else {
+    saveStringArg("wifi_pass", wifiPass, sizeof(wifiPass));
+  }
+
   saveStringArg("auth_user", authUser, sizeof(authUser));
   saveStringArg("auth_pass", authPass, sizeof(authPass));
 
@@ -250,6 +302,7 @@ void handleSave() {
   if (mqttPortInvalid) alertMsg += " (MQTT port rejected: must be 1-65535)";
   if (oscPortInvalid) alertMsg += " (OSC port rejected: must be 1-65535)";
   if (ethAddrInvalid) alertMsg += " (ETH IP/gateway/netmask rejected: not a valid IPv4 address)";
+  if (wifiSsidTooLong) alertMsg += " (WiFi SSID rejected: toi da " + String((int)sizeof(wifiSsid) - 1) + " ky tu)";
 
   server.send(200, "text/html", "<script>alert('" + alertMsg + "');window.location.href='/';</script>");
 }
@@ -318,10 +371,25 @@ void handleTestRelay() {
 // requireAuth() o giua chung (header da xu ly xong).
 static bool otaAuthOk = false;
 
+// true khi request /update bi tu choi vi firmware dang chay chua duoc xac nhan - xem
+// handleUpdateUrl() ve ly do. Giu qua ca chuoi chunk giong otaAuthOk, de handleUpdateFinish()
+// bao dung nguyen nhan thay vi mot loi Update.h chung chung.
+static bool otaBlockedPending = false;
+
 // Reset mem board. Gui response TRUOC roi moi restart (giong handleUpdateFinish) - neu goi
 // ESP.restart() ngay thi trinh duyet chi thay ket noi bi cat, khong biet lenh da nhan chua.
 void handleUpdateUrl() {
   if (!requireAuth()) return;
+
+  // Firmware dang chay chua duoc xac nhan => esp_ota_begin() se tu choi voi
+  // ESP_ERR_OTA_ROLLBACK_INVALID_STATE (xem esp_ota_ops.h). Chan tai day de bao duoc mot cau ro
+  // rang kem so giay con lai, thay vi de httpUpdate that bai voi mot ma loi kho doan giua chung.
+  if (otaPendingVerify()) {
+    String msg = "Firmware hien tai dang CHAY THU, chua duoc xac nhan - chua nap moi duoc. "
+                 "Doi khoang " + String(otaConfirmRemainSec()) + " giay roi thu lai.";
+    server.send(200, "text/html", "<script>alert('" + msg + "');window.location.href='/';</script>");
+    return;
+  }
 
   String alertMsg;
   bool urlOk = true;
@@ -397,17 +465,25 @@ void handleUpdateUpload() {
       LOG("OTA: tu choi upload - sai auth");
       return;
     }
+    // Chan TRUOC Update.begin(): trong cua so chay thu, esp_ota_begin() se that bai voi
+    // ESP_ERR_OTA_ROLLBACK_INVALID_STATE. De no chay toi day roi moi hong thi nguoi dung nhan
+    // duoc mot ma loi vo nghia sau khi da cho upload xong ca 1.2MB.
+    otaBlockedPending = otaPendingVerify();
+    if (otaBlockedPending) {
+      LOG("OTA: tu choi upload - firmware hien tai dang chay thu, con %u giay", (unsigned)otaConfirmRemainSec());
+      return;
+    }
     LOG("OTA: bat dau nhan file '%s'", upload.filename.c_str());
     if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
       Update.printError(Serial);
     }
   } else if (upload.status == UPLOAD_FILE_WRITE) {
-    if (!otaAuthOk) return;
+    if (!otaAuthOk || otaBlockedPending) return;
     if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
       Update.printError(Serial);
     }
   } else if (upload.status == UPLOAD_FILE_END) {
-    if (!otaAuthOk) return;
+    if (!otaAuthOk || otaBlockedPending) return;
     if (Update.end(true)) {
       LOG("OTA: nhan xong %u bytes", (unsigned)upload.totalSize);
     } else {
@@ -427,10 +503,18 @@ void handleUpdateFinish() {
   // lan OTA truoc. Khong khai thac duoc de ghi flash (chunk START luon authenticate() lai
   // truoc khi ghi byte nao) nhung khong co ly do gi de co do song sot qua request.
   bool authed = otaAuthOk;
+  bool blocked = otaBlockedPending;
   otaAuthOk = false;
+  otaBlockedPending = false;
 
   if (!authed) {
     server.requestAuthentication();
+    return;
+  }
+  if (blocked) {
+    String msg = "Firmware hien tai dang CHAY THU, chua duoc xac nhan - chua nap moi duoc. "
+                 "Doi khoang " + String(otaConfirmRemainSec()) + " giay roi thu lai.";
+    server.send(200, "text/html", "<script>alert('" + msg + "');window.location.href='/';</script>");
     return;
   }
   bool ok = !Update.hasError();
@@ -484,6 +568,12 @@ int saveConfig() {
   if (!prefs.putString(NVS_KEY("eth_gw"), ethStaticGateway)) fails++;
   if (!prefs.putString(NVS_KEY("eth_mask"), ethStaticNetmask)) fails++;
   if (!prefs.putBool(NVS_KEY("eth_first"), ethUseStaticFirst)) fails++;
+
+  if (!prefs.putBool(NVS_KEY("wifi_en"), wifiEnabled)) fails++;
+  // Ca 2 chuoi nay hop le khi RONG (chua nhap SSID / mang mo khong mat khau) - xem giai thich
+  // o mqtt_user ben tren ve viec putString() tra 0 byte cho chuoi rong ke ca khi ghi thanh cong.
+  if (prefs.putString(NVS_KEY("wifi_ssid"), wifiSsid) == 0 && strlen(wifiSsid) > 0) fails++;
+  if (prefs.putString(NVS_KEY("wifi_pass"), wifiPass) == 0 && strlen(wifiPass) > 0) fails++;
 
   if (!prefs.putString(NVS_KEY("auth_user"), authUser)) fails++;
   if (!prefs.putString(NVS_KEY("auth_pass"), authPass)) fails++;
@@ -549,6 +639,12 @@ void loadConfig() {
   strncpy(ethStaticNetmask, prefs.getString(NVS_KEY("eth_mask"), ethStaticNetmask).c_str(), sizeof(ethStaticNetmask) - 1);
   ethStaticNetmask[sizeof(ethStaticNetmask) - 1] = '\0';
   ethUseStaticFirst = prefs.getBool(NVS_KEY("eth_first"), ethUseStaticFirst);
+
+  wifiEnabled = prefs.getBool(NVS_KEY("wifi_en"), wifiEnabled);
+  strncpy(wifiSsid, prefs.getString(NVS_KEY("wifi_ssid"), wifiSsid).c_str(), sizeof(wifiSsid) - 1);
+  wifiSsid[sizeof(wifiSsid) - 1] = '\0';
+  strncpy(wifiPass, prefs.getString(NVS_KEY("wifi_pass"), wifiPass).c_str(), sizeof(wifiPass) - 1);
+  wifiPass[sizeof(wifiPass) - 1] = '\0';
 
   strncpy(authUser, prefs.getString(NVS_KEY("auth_user"), authUser).c_str(), sizeof(authUser) - 1);
   authUser[sizeof(authUser) - 1] = '\0';

@@ -20,9 +20,10 @@ static String htmlEscape(const char *s) {
 
 void handleRoot() {
   String html;
-  // Trang nay dai ~11KB. Khong reserve() thi day la hon chuc lan realloc+memcpy tang dan moi
-  // lan mo trang, moi lan bo lai mot lo block chet giua heap.
-  html.reserve(12288);
+  // Trang nay dai ~15KB (rieng phan chuoi tinh da ~14.6KB). Khong reserve() thi day la hon chuc
+  // lan realloc+memcpy tang dan moi lan mo trang, moi lan bo lai mot lo block chet giua heap.
+  // Nho hon kich thuoc that thi cung mat tac dung - dat du rong roi kiem lai khi them muc moi.
+  html.reserve(16384);
 
   html += "<!DOCTYPE html><html><head>";
   html += "<meta charset='utf-8'>";
@@ -148,7 +149,19 @@ void handleRoot() {
   html += "<div class='single'><label>IP</label><input name='eth_ip' value='" + htmlEscape(ethStaticIp) + "'></div>";
   html += "<div class='single'><label>Gateway</label><input name='eth_gw' value='" + htmlEscape(ethStaticGateway) + "'></div>";
   html += "<div class='single'><label>Netmask</label><input name='eth_mask' value='" + htmlEscape(ethStaticNetmask) + "'></div>";
-  html += "<div class='note'>Bỏ tick: thiết bị thử DHCP trước (tối đa 10s lúc boot), chỉ dùng IP tĩnh khi DHCP thất bại. Tick: dùng IP tĩnh ngay từ đầu, bỏ qua DHCP hoàn toàn (boot nhanh hơn). Sau khi áp IP tĩnh, board <b>ping thử gateway</b> — không có hồi đáp thì coi như IP nhập sai mạng và tự lùi về DHCP. Nếu router của bạn chặn ICMP thì board sẽ lùi về DHCP một cách không cần thiết (chỉ chậm thêm ~10s, vẫn quay lại đúng IP tĩnh này nếu DHCP cũng không lên). Đổi giá trị ở đây cần reboot board mới áp dụng.</div>";
+  html += "<div class='note'>Bỏ tick: thiết bị thử DHCP trước (tối đa 10s lúc boot), chỉ dùng IP tĩnh khi DHCP thất bại. Tick: dùng IP tĩnh ngay từ đầu, bỏ qua DHCP hoàn toàn (boot nhanh hơn). Sau khi áp IP tĩnh, board <b>ping thử gateway</b> — không có hồi đáp thì coi như IP nhập sai mạng và tự lùi về DHCP. Nếu router của bạn chặn ICMP thì board sẽ lùi về DHCP một cách không cần thiết (chỉ chậm thêm ~10s, vẫn quay lại đúng IP tĩnh này nếu DHCP cũng không lên). Bộ IP tĩnh này cũng được WiFi dự phòng dùng lại (xem mục WiFi bên dưới). Đổi giá trị ở đây cần reboot board mới áp dụng.</div>";
+  html += "</div>";
+
+  html += "<div class='panel'>";
+  html += "<h3>WiFi (dự phòng khi ETH hỏng)</h3>";
+  html += "<div class='single'><label><input type='checkbox' name='wifi_enable' " + String(wifiEnabled ? "checked" : "") + "> Cho phép dùng WiFi khi ETH không lên</label></div>";
+  html += "<div class='single'><label>SSID</label><input name='wifi_ssid' value='" + htmlEscape(wifiSsid) + "'></div>";
+  // KHONG do mat khau WiFi ra HTML - trang "/" khong yeu cau dang nhap, xem ghi chu o mqtt_pass.
+  html += "<div class='single'><label>Mật khẩu</label><input type='password' name='wifi_pass' placeholder='" + String(wifiPass[0] ? "(giữ nguyên nếu để trống)" : "(đang để trống - mạng mở)") + "'></div>";
+  html += "<div class='single'><label><input type='checkbox' name='wifi_pass_clear'> Xoá mật khẩu WiFi (mạng mở)</label></div>";
+  html += "<div class='note'>ETH luôn được ưu tiên: lúc khởi động board chờ tối đa <b>20 giây</b> để Ethernet lên mạng, hết thời gian đó mà vẫn chưa có IP (thường là chưa cắm dây / switch chết) thì mới bật WiFi. Sensor và relay chạy ngay từ giây đầu, không đợi mạng. Nếu ô <b>Ưu tiên IP tĩnh</b> ở trên được tick thì WiFi dùng đúng bộ IP/Gateway/Netmask đó — chỉ cần nhớ một địa chỉ cho một board. Bỏ tick thì WiFi xin DHCP. Đổi giá trị ở đây cần reboot mới áp dụng.</div>";
+  html += "<div class='note'><b>Cắm lại dây ETH:</b> nếu lúc khởi động ETH không lên (đang chạy WiFi, hoặc không có mạng nào), board chờ link ổn định 15 giây rồi <b>tự khởi động lại</b> để quay về ETH đúng bộ IP tĩnh ở trên. Không làm vậy thì card mạng ETH sẽ tự xin DHCP và board bật lên bằng một IP lạ, đồng thời hai đường mạng cùng sống với hai địa chỉ khác nhau. Tối đa 2 lần, tránh dây lỏng chập chờn làm board reboot liên miên.</div>";
+  html += "<div class='note'><b>Mất ETH giữa chừng:</b> nếu đang chạy bằng ETH mà mất mạng liên tục quá <b>1 phút</b>, board <b>tự khởi động lại</b> để đi lại từ đầu (chờ ETH 20 giây → chuyển WiFi). Relay và cảm biến ngưng khoảng 3-5 giây (thời gian board reset), sau đó chạy lại ngay cả khi mạng chưa lên. Chỉ làm vậy khi đã cấu hình WiFi dự phòng ở trên (không có WiFi thì reboot cũng không cứu được gì nên board nằm im, relay chạy tiếp), chỉ khi <b>ETH đã từng lên được</b> trong lần chạy này (boot lên đã không có ETH thì lúc khởi động đã thử đủ ETH→WiFi rồi, reboot lại vô ích mà còn cắt mất WiFi chẩn đoán), và <b>tối đa 1 lần</b> — reboot xong vẫn không có mạng thì thôi, không lặp. Bộ đếm này về 0 khi mạng lành lại 1 phút hoặc khi cúp điện; số lần đã reboot hiện ở khung trạng thái trên cùng.</div>";
   html += "</div>";
 
   html += "<div class='panel'>";
@@ -172,6 +185,7 @@ void handleRoot() {
   html += "<div class='panel'>";
   html += "<h3>Firmware Update (OTA)</h3>";
   html += "<div class='note'>Chọn file firmware.bin (build từ PlatformIO: .pio/build/esp32-s3-devkitc-1/firmware.bin) rồi bấm Upload. Board tự khởi động lại sau khi nạp xong. KHÔNG rút nguồn/mất mạng giữa chừng - có thể phải nạp lại qua USB nếu hỏng.</div>";
+  html += "<div class='note'><b>Lưới an toàn:</b> firmware vừa nạp phải <b>chạy liên tục 60 giây</b> mới được xác nhận. Nếu nó chết trước mốc đó (kể cả chết ngay lúc khởi động, chưa kịp lên mạng), lần khởi động kế tiếp bootloader <b>tự quay về bản cũ đang chạy tốt</b> - không phải mang board đi nạp lại bằng USB. Đổi lại: trong 60 giây đó, <b>cúp nguồn cũng bị tính là thất bại</b> và board sẽ lùi về bản cũ dù firmware mới không có lỗi gì. Khung trạng thái trên cùng có báo khi đang trong thời gian chạy thử. Trong 60 giây đó <b>không nạp firmware mới được</b> (kể cả nạp từ link) - SDK từ chối, phải đợi bản hiện tại được xác nhận đã.</div>";
   html += "<form action='/update' method='POST' enctype='multipart/form-data' onsubmit=\"return confirm('Nạp firmware mới? Board sẽ khởi động lại sau khi xong.');\">";
   html += "<input type='file' name='firmware' accept='.bin' required style='width:100%;padding:10px;border:1px solid #bfc9d6;border-radius:8px;margin-bottom:8px;background:#fff'>";
   html += "<input class='btn' type='submit' value='Upload & Update'>";
@@ -191,7 +205,13 @@ void handleRoot() {
   html += "<div class='panel'>";
   html += "<h3>Khởi động lại</h3>";
   html += "<div class='note'>Reset mềm board (như rút/cắm nguồn). Cấu hình đã lưu KHÔNG mất. Board mất khoảng 15-20 giây để lên mạng lại - nếu trang chưa tải được thì đợi thêm rồi F5.</div>";
-  html += "<form action='/reboot' method='POST' onsubmit=\"return confirm('Khởi động lại board? Relay và cảm biến ngưng vài chục giây - đừng bấm khi khách đang chơi.');\">";
+  // Trong cua so chay thu, mot cu reset = bootloader lui ve firmware cu. Doi han loi canh bao
+  // trong hop thoai xac nhan, vi day la nut duy nhat nguoi dung chu dong bam de reset.
+  if (otaPendingVerify()) {
+    html += "<form action='/reboot' method='POST' onsubmit=\"return confirm('CẢNH BÁO: firmware vừa nạp đang chạy thử, chưa được xác nhận. Khởi động lại lúc này sẽ làm board QUAY VỀ BẢN CŨ. Đợi khoảng " + String(otaConfirmRemainSec()) + " giây nữa rồi hãy bấm. Vẫn khởi động lại?');\">";
+  } else {
+    html += "<form action='/reboot' method='POST' onsubmit=\"return confirm('Khởi động lại board? Relay và cảm biến ngưng vài chục giây - đừng bấm khi khách đang chơi.');\">";
+  }
   html += "<input class='btn' type='submit' value='⟳ RESET ESP32'>";
   html += "</form>";
   html += "</div>";

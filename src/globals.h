@@ -69,6 +69,19 @@ extern WebServer server;
 extern Preferences prefs;
 extern WiFiUDP oscUdp;
 extern bool eth_connected;
+extern bool wifi_connected;
+
+// Duong mang nao dang thuc su cam - dung cho loop() (co chay web server khong), cho SSID cua
+// diag AP va cho dashboard. Dinh nghia trong main.cpp.
+bool netConnected();
+IPAddress netLocalIP();
+const char* netLinkName();   // "ETH" / "WiFi" / "-"
+
+// So lan board da TU reboot vi mat ETH trong phien cam dien nay (xem netWatchdogTick() trong
+// main.cpp). Hien len dashboard vi mot cu reboot giua buoi dien la vo hinh voi operator - khong
+// co so nay thi ho chi thay "sao no lai vao trang thai khoi dong?" ma khong biet tai dau.
+uint32_t netLossReboots();     // reboot vi MAT ETH giua chung
+uint32_t ethReturnReboots();   // reboot vi CAM LAI day ETH (de quay ve IP tinh)
 
 extern bool diagApActive;
 extern unsigned long diagApStartMs;
@@ -135,6 +148,29 @@ void fwIdInit();
 // trong mang noi bo, dung tro ra Internet qua HTTP tran.
 extern char otaUrl[96];
 
+// --- OTA rollback guard (2026-08-13) ------------------------------------------------------
+// Bootloader cua ban ESP-IDF nay CO san co che rollback (CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+// =y): anh vua OTA duoc danh dau PENDING_VERIFY, neu thiet bi reset ma chua ai xac nhan la
+// "chay tot" thi lan boot sau bootloader tu quay ve anh cu.
+//
+// Nhung Arduino vo hieu hoa no: initArduino() goi thang esp_ota_mark_app_valid_cancel_rollback()
+// TRUOC khi setup() chay (xem esp32-hal-misc.c). Tuc anh moi duoc cong nhan la tot vai mili
+// giay truoc khi no kip chung minh dieu do - dung mot ban firmware chet ngay trong setup() thi
+// mang luoi an toan nay khong bat duoc gi ca. Da xay ra that: mot ban loi OTA cho board o xa,
+// chet o setup(), va vi chua kip len mang nen khong con duong nao vao ngoai cam USB tan noi.
+//
+// Cach chua: ghi de weak symbol verifyRollbackLater() cho no tra ve true (hoan xac nhan), roi
+// TU xac nhan trong loop() sau khi da chay lien tuc OTA_CONFIRM_MS. Firmware chet truoc moc do
+// => lan boot ke tiep bootloader tu lui ve ban cu dang chay tot.
+//
+// Danh doi phai biet: trong cua so cho xac nhan, CUP NGUON cung bi tinh la "khong qua duoc bai
+// kiem tra" va se lui ve ban cu - du firmware moi hoan toan binh thuong. Vi the cua so de ngan
+// (xem OTA_CONFIRM_MS trong main.cpp) va dashboard co bao dang o trang thai chay thu.
+void otaRollbackInit();
+void otaRollbackTick();
+bool otaPendingVerify();     // true khi ban dang chay VAN CHUA duoc xac nhan
+uint32_t otaConfirmRemainSec();  // con bao nhieu giay nua thi xac nhan (0 neu khong con cho)
+
 // Dat true tu handleUpdateUrl(); otaUrlTick() trong loop() moi thuc su tai. KHONG goi
 // httpUpdate.update() thang trong handler: no chan 10-30 giay roi reboot giua chung, response
 // chua kip ra khoi socket nen trinh duyet bao loi mang du update chay dung.
@@ -148,6 +184,22 @@ extern char ethStaticIp[16];
 extern char ethStaticGateway[16];
 extern char ethStaticNetmask[16];
 extern bool ethUseStaticFirst;
+
+// --- WiFi du phong (2026-08-13) -----------------------------------------------------------
+// ETH van la duong CHINH: luc boot board cho toi ETH_TOTAL_WAIT_MS (1 phut) de Ethernet len
+// duoc IP. Chi khi het phut do ma van khong co gi (thuong la khong cam day / switch chet) thi
+// moi bat WiFi STA de it nhat con vao duoc Web UI + ban MQTT/OSC.
+//
+// Dung CHUNG bo IP tinh voi ETH (ethStaticIp/Gateway/Netmask) khi ethUseStaticFirst = true -
+// operator chi phai nho MOT dia chi cho mot board du no dang cam day hay dang chay wifi. An
+// toan vi hai duong nay khong bao gio song cung luc: chi vao nhanh WiFi khi ETH da that bai.
+// Bo tick uu tien IP tinh thi WiFi xin DHCP nhu binh thuong.
+//
+// KHONG tu chuyen nguoc ve ETH khi cam lai day giua chung - phai reboot. Chuyen qua lai giua 2
+// netif luc dang chay se lam MQTT/OSC dut quang kho doan hon la mot lan reboot chu dong.
+extern bool wifiEnabled;
+extern char wifiSsid[33];   // chuan 802.11: toi da 32 ky tu + NUL
+extern char wifiPass[64];   // WPA2-PSK: toi da 63 ky tu + NUL; de trong = mang mo
 
 // Debounce dung chung cho ca 2 sensor
 extern unsigned long debounceTime;
