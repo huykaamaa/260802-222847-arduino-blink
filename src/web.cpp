@@ -95,7 +95,14 @@ void handleData() {
   // khong phai doi den luc no rot not.
   data += "<br><b>Mạng:</b> ";
   if (!netConnected()) {
-    data += "<span style='color:red'>KHÔNG CÓ IP</span>";
+    data += "<span style='color:red;font-weight:bold'>CHƯA VÀO ĐƯỢC MẠNG</span> (không có IP)";
+  } else if (!netVerified()) {
+    // Co IP nhung khong co bang chung noi duoc voi ai: gan nhu chac chan la chua cam day mang.
+    // Hien so IP mo di va noi thang, thay vi de nguoi doc tuong mang dang chay binh thuong.
+    data += "<span style='color:red;font-weight:bold'>CHƯA VÀO ĐƯỢC MẠNG</span>";
+    data += "<br><span style='font-size:12px;color:#b45309'>Đã áp IP tĩnh " + netLocalIP().toString() +
+            " nhưng gateway không trả lời — nhiều khả năng chưa cắm dây mạng, hoặc switch tắt. "
+            "Địa chỉ này hiện chưa dùng được.</span>";
   } else if (eth_connected) {
     data += "<span style='color:green'>ETH</span> " + netLocalIP().toString();
   } else {

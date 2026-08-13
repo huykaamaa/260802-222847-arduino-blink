@@ -77,6 +77,11 @@ bool netConnected();
 IPAddress netLocalIP();
 const char* netLinkName();   // "ETH" / "WiFi" / "-"
 
+// netConnected() chi noi "co IP gan tren netif" - van true khi bo IP tinh duoc ap vao mot cong
+// KHONG cam day. netVerified() moi la "co bang chung noi duoc voi mang" (DHCP cap IP, hoac
+// gateway tra loi ping). Dashboard phai dung cai thu hai.
+bool netVerified();
+
 // So lan board da TU reboot vi mat ETH trong phien cam dien nay (xem netWatchdogTick() trong
 // main.cpp). Hien len dashboard vi mot cu reboot giua buoi dien la vo hinh voi operator - khong
 // co so nay thi ho chi thay "sao no lai vao trang thai khoi dong?" ma khong biet tai dau.

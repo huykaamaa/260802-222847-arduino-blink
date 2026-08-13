@@ -63,6 +63,20 @@ static bool wifiStaActive = false;
 static bool ethUpAtBoot = false;
 static bool ethEverUp = false;
 
+// Co day mang dang cam va bat tay xong chua. PHAI theo doi bang su kien ETH_CONNECTED /
+// ETH_DISCONNECTED chu KHONG duoc dung ETH.linkUp(): ham do thuc chat la
+// NetworkInterface::linkUp(), than ham chi co "return esp_netif_is_netif_up(_esp_netif)" - tuc
+// no bao netif da duoc dung len hay chua, hoan toan khong doc trang thai PHY. Ap mot bo IP tinh
+// cung lam netif up, nen dung no de hoi "co day khong" thi cau tra loi la "co" ke ca khi day
+// dang nam tren ban.
+static volatile bool ethLinkPresent = false;
+
+// ETH co bang chung THUC SU noi duoc voi mang chua: DHCP cap duoc IP (chung to co server tra
+// loi) hoac gateway tra loi ping. Bo IP tinh ap vao mot cong khong cam day cung tao ra mot dia
+// chi trong dep de nhung khong ai toi duoc - co nay de phan biet hai truong hop do tren
+// dashboard va tren ten diag AP, thay vi bao "STATIC 192.168.99.5" nhu the moi thu deu on.
+static bool ethVerified = false;
+
 // So lan da tu reboot vi mang, xem netWatchdogTick() / ethReturnTick(). Muc dich cua bo dem la
 // chan vong lap reboot, nen no BAT BUOC phai song qua ESP.restart() - bien thuong thi moi lan
 // reboot lai ve 0 va cai tran tro thanh vo nghia.
@@ -99,6 +113,10 @@ uint32_t ethReturnReboots() { return ethReturnRebootCount; }
 bool netConnected() { return eth_connected || wifi_connected; }
 IPAddress netLocalIP() { return eth_connected ? ETH.localIP() : WiFi.localIP(); }
 const char* netLinkName() { return eth_connected ? "ETH" : (wifi_connected ? "WiFi" : "-"); }
+
+// Co bang chung thuc su noi duoc voi mang hay khong. eth_connected chi co nghia "da co mot bo
+// IP gan vao netif" - dieu do van dung khi day mang nam tren ban.
+bool netVerified() { return wifi_connected || (eth_connected && ethVerified); }
 
 // Diagnostic AP - phat wifi de doc IP ETH tren dien thoai, tu tat sau 5 phut
 static const unsigned long DIAG_AP_DURATION_MS = 5UL * 60UL * 1000UL;
@@ -222,19 +240,27 @@ static void WiFiEvent(arduino_event_id_t event) {
       ETH.setHostname("ESP32-GiaSach");
       break;
     case ARDUINO_EVENT_ETH_CONNECTED:
-      LOG("ETH Connected");
+      // Day su kien PHY that su bao "da co day va bat tay xong" - xem ethLinkPresent.
+      LOG("ETH Connected (co day mang)");
+      ethLinkPresent = true;
       break;
     case ARDUINO_EVENT_ETH_GOT_IP:
+      // Chi den tu DHCP. Co IP do nghia la co server tra loi, tuc mang that.
       LOG("ETH Got IP: %s", ETH.localIP().toString().c_str());
       eth_connected = true;
+      ethVerified = true;
       break;
     case ARDUINO_EVENT_ETH_DISCONNECTED:
-      LOG("ETH Disconnected");
+      LOG("ETH Disconnected (mat day mang)");
+      ethLinkPresent = false;
       eth_connected = false;
+      ethVerified = false;
       break;
     case ARDUINO_EVENT_ETH_STOP:
       LOG("ETH Stopped");
+      ethLinkPresent = false;
       eth_connected = false;
+      ethVerified = false;
       break;
 
     // WiFi du phong: chi co y nghia khi da roi vao nhanh fallback, nhung van bat su kien vo
@@ -372,10 +398,10 @@ static bool gatewayReachable(IPAddress gw)
   // chac chan khong co hoi dap va se ket luan sai la "IP tinh hong".
   const unsigned long LINK_WAIT_MS = 5000UL;
   unsigned long t0 = millis();
-  while (!ETH.linkUp() && (millis() - t0) < LINK_WAIT_MS) {
+  while (!ethLinkPresent && (millis() - t0) < LINK_WAIT_MS) {
     netDelay(50);
   }
-  if (!ETH.linkUp()) {
+  if (!ethLinkPresent) {
     // Khong co day mang thi DHCP cung chet, khong ket luan duoc gi - giu nguyen IP tinh.
     LOG("ETH: chua co link sau %lu ms - bo qua buoc ping, giu IP tinh", LINK_WAIT_MS);
     return true;
@@ -427,6 +453,9 @@ static void startDiagAp(const char *tag) {
   // dan "0.0.0.0" vao lam operator tuong day la mot dia chi that.
   String ssid = String("GIASACH-") + tag;
   if (netConnected()) ssid += "-" + netLocalIP().toString();
+  // Chan cung theo gioi han SSID cua 802.11. Khong cat thi softAP() that bai va operator mat
+  // duong vao cuoi cung - hong am tham dung luc moi thu khac cung dang hong.
+  if (ssid.length() > 32) ssid = ssid.substring(0, 32);
   // Da bat STA thi PHAI la AP_STA: WIFI_AP thuan se tat luon STA. Dieu kien la wifiStaActive
   // chu khong phai wifiFallbackActive - neu chi giu STA khi da ket noi duoc thi truong hop
   // "chua ket noi duoc, dang cho thu lai" se bi cat dut ngay tai day.
@@ -699,7 +728,7 @@ void setup() {
   // board tuong minh dang o tren mang du chang noi voi ai duoc - va nhu the thi nhanh WiFi se
   // KHONG BAO GIO chay. Khong co link = khong co Ethernet, du IP dep den may.
   bool ethLinkUp = false;
-  while (!(ethLinkUp = ETH.linkUp()) && (long)(ethDeadline - millis()) > 0) {
+  while (!(ethLinkUp = ethLinkPresent) && (long)(ethDeadline - millis()) > 0) {
     netDelay(100);
   }
   if (!ethLinkUp) {
@@ -717,6 +746,7 @@ void setup() {
       if (ETH.config(ip, gw, mask, gw)) {
         if (gatewayReachable(gw)) {
           eth_connected = true;
+          ethVerified = true;   // gateway tra loi = co mang that
           usedFallback = true;
           LOG("ETH: dung IP tinh ngay tu dau (uu tien) - %s (gw %s, mask %s), gateway tra loi ping", ethStaticIp, ethStaticGateway, ethStaticNetmask);
         } else {
@@ -755,7 +785,13 @@ void setup() {
         if (ETH.config(fallbackIp, fallbackGw, fallbackMask, fallbackGw)) { // gw lam DNS1, xem tren
           eth_connected = true;
           usedFallback = true;
-          LOG("ETH: static fallback IP %s (gw %s, mask %s)", ethStaticIp, ethStaticGateway, ethStaticNetmask);
+          // Ping o day nua chu khong chi o nhanh uu tien-IP-tinh: khong hoi dap thi bo IP nay
+          // chi la mot dia chi trong dep de ma khong ai toi duoc. Van GIU IP (Web UI con vao
+          // duoc neu sau do co nguoi cam day) nhung KHONG bao la da vao mang.
+          ethVerified = gatewayReachable(fallbackGw);
+          LOG("ETH: static fallback IP %s (gw %s, mask %s) - gateway %s",
+              ethStaticIp, ethStaticGateway, ethStaticNetmask,
+              ethVerified ? "tra loi ping, mang OK" : "KHONG tra loi - CHUA VAO DUOC MANG");
         } else {
           LOG("ETH: static fallback ETH.config() that bai");
         }
@@ -776,7 +812,18 @@ void setup() {
   ethEverUp = eth_connected;
 
   if (netConnected()) {
-    startDiagAp(eth_connected ? (usedFallback ? "STATIC" : "DHCP") : "WIFI");
+    // Ten AP la thu duy nhat operator doc duoc tu dien thoai khi khong vao duoc Web UI, nen no
+    // phai noi dung su that. "STATIC-192.168.99.5" tren mot board khong cam day mang la mot loi
+    // noi doi rat dat: nguoi ta se di tim IP do tren mang thay vi di kiem tra soi day.
+    //
+    // Tag toi da 8 ky tu: SSID chuan 802.11 gioi han 32, ma "GIASACH-" (8) + tag + "-" (1) +
+    // IPv4 dai nhat (15) = 24 + tag. Vuot qua thi softAP() that bai va mat luon duong nay.
+    const char *tag;
+    if (!eth_connected)      tag = "WIFI";
+    else if (!ethVerified)   tag = "OFFLINE";
+    else if (usedFallback)   tag = "STATIC";
+    else                     tag = "DHCP";
+    startDiagAp(tag);
   } else {
     // Van phat diag AP du khong co mang: day la duong vao Web UI cuoi cung con lai (noi vao AP
     // roi mo http://192.168.4.1) de con sua duoc SSID/IP tinh ma khong phai cam laptop + Serial
@@ -936,7 +983,7 @@ static void ethReturnTick() {
   // tuc tu huy chinh firmware vua nap.
   if (otaPendingVerify()) return;
 
-  if (!ETH.linkUp()) {
+  if (!ethLinkPresent) {
     linkUpSince = 0;
     return;
   }
