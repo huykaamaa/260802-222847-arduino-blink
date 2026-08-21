@@ -62,7 +62,13 @@ void handleRoot() {
   html += "<script>";
   html += "function update(){fetch('/data').then(r=>r.text()).then(t=>document.getElementById('d').innerHTML=t);}";
   html += "setInterval(update,500);";
-  html += "window.onload=update;";
+  // Log KHONG tu tai theo chu ky: no ~4KB moi lan, ma dashboard da poll 2 lan/giay roi. Tai mot
+  // lan luc mo trang (du de xem dien bien khoi dong) roi de nut bam lo cac lan sau.
+  html += "function loadLog(){var b=document.getElementById('logbox');b.textContent='Đang tải...';"
+          "fetch('/log').then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.text();})"
+          ".then(t=>{b.textContent=t;b.scrollTop=b.scrollHeight;})"
+          ".catch(e=>{b.textContent='Không đọc được log: '+e.message;});}";
+  html += "window.onload=function(){update();loadLog();};";
   html += "</script>";
   html += "</head><body><div class='card'>";
   html += "<h2>GIÁ SÁCH</h2>";
@@ -200,6 +206,21 @@ void handleRoot() {
   html += "<button class='btn' type='submit' name='act' value='save' style='margin-top:0'>Lưu URL</button>";
   html += "<button class='btn' type='submit' name='act' value='update' onclick=\"return confirm('Tải firmware từ link và nạp? Board sẽ khởi động lại sau khi xong.');\">Nạp từ link</button>";
   html += "</form>";
+  html += "</div>";
+
+  //================ LOG ================
+  // Doc bang textContent chu khong phai innerHTML: log chua ten SSID / URL do nguoi khac dat,
+  // nhet thang vao innerHTML la mo duong cho the <script> trong mot cai ten AP chay tren trang
+  // nay. textContent hien nguyen van, khong dien giai gi.
+  html += "<div class='panel'>";
+  html += "<h3>Log</h3>";
+  html += "<div class='note'>Nhật ký khởi động và sự kiện mạng, đọc từ RAM của board (60 dòng gần nhất, mất khi cúp điện). Số đầu dòng là giây kể từ lúc board khởi động.</div>";
+  html += "<div class='row'>";
+  html += "<button class='btn btn-test' style='width:auto;flex:0 0 130px' type='button' onclick='loadLog()'>Tải lại log</button>";
+  html += "</div>";
+  html += "<pre id='logbox' style='background:#0f172a;color:#e2e8f0;padding:10px;border-radius:8px;"
+          "font-size:11px;line-height:1.45;max-height:320px;overflow:auto;white-space:pre-wrap;"
+          "word-break:break-word;margin-top:8px'>Bấm \"Tải lại log\"...</pre>";
   html += "</div>";
 
   html += "<div class='panel'>";

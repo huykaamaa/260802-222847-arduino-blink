@@ -470,6 +470,16 @@ void handleUpdateUrl() {
   server.send(200, "text/html", page);
 }
 
+// Do vong dem log ra text tho. Co requireAuth: log co the chua ten SSID, dia chi IP/broker va
+// dien bien cau hinh - khong nen de bat ky ai trong tam song doc duoc.
+//
+// text/plain chu khong phai HTML: khoi phai escape, va trinh duyet hien nguyen van khong dien
+// giai gi - dung cai can khi doc log.
+void handleLog() {
+  if (!requireAuth()) return;
+  server.send(200, "text/plain; charset=utf-8", logDump());
+}
+
 void handleReboot() {
   if (!requireAuth()) return;
   server.send(200, "text/html",

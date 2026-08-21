@@ -18,6 +18,7 @@ void handleUpdateFinish();
 void handleUpdateUrl();
 
 // Reset mem board qua Web UI (ESP.restart()). Gated giong cac route doi trang thai khac.
+void handleLog();
 void handleReboot();
 
 // Tick tung buoc cua chuoi Test (goi tu loop() trong main.cpp) - khong block.

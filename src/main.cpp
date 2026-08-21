@@ -30,6 +30,68 @@ const uint8_t relayPins[RELAY_NUM] = {5, 4, 16, 6, 7, 15};
 // ======================================================================
 // STATE / CONFIG
 // ======================================================================
+// ======================================================================
+// LOG VONG - xem globals.h
+// ======================================================================
+// 60 dong x 128 ky tu = 7.7KB RAM tinh. Doi lai la doc duoc dien bien khoi dong cua mot board
+// nam cach xa vai chuc cay so, thu ma truoc gio chi co cap USB moi thay duoc.
+//
+// 60 dong du chua tron ven mot lan boot (chuoi cho ETH -> thu WiFi -> MQTT) - do la doan can
+// doc nhat. Dai hon nua thi cai can xem bi day ra khoi dem boi log chay dinh ky luc sau.
+#define LOG_LINES 60
+#define LOG_LINE_MAX 128
+static char logBuf[LOG_LINES][LOG_LINE_MAX];
+// uint32_t chu khong phai uint16_t: dem den 65535 roi vong ve 0 se lam logDump() tinh sai moc
+// bat dau va in ra thu tu lung tung. 32 bit thi voi nhip log cua board nay la hang chuc nam.
+static uint32_t logCount = 0;   // tong so dong da ghi (khong reset khi vong lai)
+// LOG() duoc goi ca tu loop() lan tu WiFiEvent() - von chay trong task su kien cua he thong -
+// nen hai luong co the ghi cung luc. Spinlock chi bao doan CHEP vao dem; phan dinh dang chuoi
+// (vsnprintf, cham) de ben ngoai de khong khoa lau.
+static portMUX_TYPE logMux = portMUX_INITIALIZER_UNLOCKED;
+
+void logPrintf(const char *fmt, ...) {
+  char line[LOG_LINE_MAX];
+
+  // Dau moi dong la so giay tu luc boot. Khong co no thi mot dem log chi la mot dong chu roi
+  // rac, khong biet cai nao xay ra truoc cai nao va cach nhau bao lau.
+  unsigned long ms = millis();
+  int n = snprintf(line, sizeof(line), "[%lu.%lus] ", ms / 1000UL, (ms % 1000UL) / 100UL);
+  if (n < 0 || n >= (int)sizeof(line)) n = 0;
+
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(line + n, sizeof(line) - n, fmt, ap);
+  va_end(ap);
+
+  Serial.println(line);   // duong Serial giu nguyen, khong mat gi
+
+  portENTER_CRITICAL(&logMux);
+  strncpy(logBuf[logCount % LOG_LINES], line, LOG_LINE_MAX - 1);
+  logBuf[logCount % LOG_LINES][LOG_LINE_MAX - 1] = '\0';
+  logCount++;
+  portEXIT_CRITICAL(&logMux);
+}
+
+String logDump() {
+  String out;
+  out.reserve(LOG_LINES * 64);
+
+  portENTER_CRITICAL(&logMux);
+  uint32_t total = logCount;
+  portEXIT_CRITICAL(&logMux);
+
+  // Chua vong het mot luot thi chi co `total` dong; vong roi thi dong cu nhat nam ngay sau con
+  // tro ghi. Doc ngoai vung khoa: du co mot dong bi ghi de giua chung thi cung chi lam ban dung
+  // dong do, khong dang de khoa ca vong lap chep chuoi.
+  uint32_t start = (total > LOG_LINES) ? (total - LOG_LINES) : 0;
+  for (uint32_t i = start; i < total; i++) {
+    out += logBuf[i % LOG_LINES];
+    out += '\n';
+  }
+  if (total == 0) out = "(chua co dong log nao)\n";
+  return out;
+}
+
 SPIClass spi(FSPI);
 WebServer server(80);
 Preferences prefs;
@@ -894,6 +956,7 @@ void setup() {
   server.on("/test_relay", HTTP_POST, handleTestRelay);
   server.on("/update", HTTP_POST, handleUpdateFinish, handleUpdateUpload);
   server.on("/update_url", HTTP_POST, handleUpdateUrl);
+  server.on("/log", HTTP_GET, handleLog);
   server.on("/reboot", HTTP_POST, handleReboot);
   server.begin();
 

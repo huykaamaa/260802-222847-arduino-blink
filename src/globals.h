@@ -9,7 +9,17 @@
 #include <Preferences.h>
 #include <mqtt_client.h>
 
-#define LOG(fmt, ...) do { Serial.printf(fmt "\r\n", ##__VA_ARGS__); } while (0)
+// --- Log vong, doc duoc tu Web UI (2026-08-21) --------------------------------------------
+// Board nam o xa, khong cam duoc USB/Serial, nen moi chan doan deu phai suy nguoc tu tin hieu
+// gian tiep ("server co thay request khong") - rat lau va rat de sai. LOG() gio vua in ra
+// Serial nhu cu, vua ghi vao mot vong dem trong RAM, doc qua http://<ip>/log.
+//
+// Vong dem chu khong phai file: khong dung toi flash (moi lan ghi la mot lan mon), va thu can
+// xem gan nhu luon la nhung dong GAN NHAT.
+#define LOG(fmt, ...) logPrintf(fmt, ##__VA_ARGS__)
+void logPrintf(const char *fmt, ...);
+// Do vong dem ra text tho, dong cu nhat truoc, kem so giay tu luc boot o dau moi dong.
+String logDump();
 
 // --- NVS / Preferences key-length guard --------------------------------------------------
 // ESP32 NVS caps key names at 15 usable chars + NUL. Wrapping every NVS key literal in
