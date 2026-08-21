@@ -979,6 +979,22 @@ void setup() {
   }
   LOG("Netif mac dinh SAU khi ep:  ETH=%d STA=%d", (int)ETH.isDefault(), (int)WiFi.STA.isDefault());
 
+  // Bo dia chi ma netif DANG THUC SU GIU - khong phai chuoi cau hinh ta truyen vao.
+  //
+  // Moi con so ve mang tu truoc toi gio deu in ra tu bien cau hinh, tuc thu MINH MUON dat. Neu
+  // mot trong so do khong duoc ap vao netif thi khong o dau lo ra ca. Dac biet la GATEWAY:
+  // thieu no thi dich trong subnet van toi (lwIP tu khop theo dia chi) con dich ngoai subnet
+  // khong co duong nao di - dung bo trieu chung dang gap.
+  if (eth_connected) {
+    LOG("Netif ETH thuc te: IP %s / mask %s / gw %s",
+        ETH.localIP().toString().c_str(), ETH.subnetMask().toString().c_str(),
+        ETH.gatewayIP().toString().c_str());
+  } else if (wifi_connected) {
+    LOG("Netif WiFi thuc te: IP %s / mask %s / gw %s",
+        WiFi.localIP().toString().c_str(), WiFi.subnetMask().toString().c_str(),
+        WiFi.gatewayIP().toString().c_str());
+  }
+
   // In DNS dang thuc su dung. Truoc day khong in o dau ca, nen khi "nap tu link bang ten mien"
   // im lang that bai thi khong co cach nao biet board dang hoi ai - phai di doan tung gia
   // thuyet mot. In ra day, ngay sau khi chot xong duong mang, la re nhat va dung luc nhat.
