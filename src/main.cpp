@@ -538,17 +538,21 @@ static bool gatewayReachable(IPAddress gw)
 // Tag toi da 8 ky tu: SSID chuan 802.11 gioi han 32, ma "GIASACH-" (8) + tag + "-" (1) + IPv4
 // dai nhat (15) = 24 + tag.
 static String diagApName() {
+  // "Co dia chi DUNG DUOC" chu khong phai "co dia chi". ETH giu mot bo IP tinh ma gateway
+  // khong tra loi thi van la khong co mang, va dia chi do khong ai toi duoc.
+  bool usable = netVerified();
+
   const char *tag;
-  if (!netConnected())     tag = "NOLINK";
+  if (!usable)             tag = "NOLINK";
   else if (!eth_connected) tag = "WIFI";
-  else if (!ethVerified)   tag = "OFFLINE";
   else if (ethUsedFallback) tag = "STATIC";
   else                     tag = "DHCP";
 
-  // Khong co duong mang nao thi khong co IP de dan vao ten AP - de tran tag ("NOLINK"), dung
-  // dan "0.0.0.0" vao lam operator tuong day la mot dia chi that.
+  // Chua dung duoc thi KHONG dan dia chi vao ten - du netif co dang giu mot bo IP tinh. Dan ra
+  // chi lam nguoi doc di tim no tren mang thay vi di kiem tra soi day; con "0.0.0.0" thi te hon
+  // nua, trong y het mot dia chi that.
   String ssid = String("GIASACH-") + tag;
-  if (netConnected()) ssid += "-" + netLocalIP().toString();
+  if (usable) ssid += "-" + netLocalIP().toString();
   // Chan cung theo gioi han SSID cua 802.11. Khong cat thi softAP() that bai va operator mat
   // duong vao cuoi cung - hong am tham dung luc moi thu khac cung dang hong.
   if (ssid.length() > 32) ssid = ssid.substring(0, 32);
