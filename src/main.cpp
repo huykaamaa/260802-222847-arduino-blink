@@ -968,12 +968,16 @@ void setup() {
   // (ETH khong cam day + WiFi), nen no la board duy nhat co the chot nham.
   //
   // Goi thang, khong dua vao suy doan cua ai ca.
+  // In trang thai TRUOC khi ep, roi moi ep, roi in lai. Chi in sau khi ep thi con so luon dep
+  // va khong chung minh duoc gi - cai can biet la esp_netif DA chon nham hay chua, tuc gia
+  // thuyet nay dung hay sai.
+  LOG("Netif mac dinh TRUOC khi ep: ETH=%d STA=%d", (int)ETH.isDefault(), (int)WiFi.STA.isDefault());
   if (eth_connected) {
     ETH.setDefault();
   } else if (wifi_connected) {
     WiFi.STA.setDefault();
   }
-  LOG("Netif mac dinh: ETH=%d STA=%d", (int)ETH.isDefault(), (int)WiFi.STA.isDefault());
+  LOG("Netif mac dinh SAU khi ep:  ETH=%d STA=%d", (int)ETH.isDefault(), (int)WiFi.STA.isDefault());
 
   // In DNS dang thuc su dung. Truoc day khong in o dau ca, nen khi "nap tu link bang ten mien"
   // im lang that bai thi khong co cach nao biet board dang hoi ai - phai di doan tung gia
