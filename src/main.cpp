@@ -177,6 +177,20 @@ char ethStaticGateway[16] = "192.168.99.1";
 char ethStaticNetmask[16] = "255.255.255.0";
 bool ethUseStaticFirst = false;
 
+// DNS DU PHONG khi chay IP TINH (2026-08-21).
+//
+// Nhanh IP tinh von chi dien dns1 = gateway va bo trong dns2. Do la mot GIA DINH: rang cai
+// gateway ay co chay dich vu DNS, va rang no chiu tra loi cho THIET BI NAY. Gia dinh do da vo
+// o mot mang that - board hoi gateway roi im, trong khi mot laptop cung dat IP tinh tren dung
+// mang do, hoi dung gateway do, lai tra ve ket qua binh thuong. Khong giai thich duoc bang
+// cach doc source, ma cung khong can: dien mot DNS cong cong vao o dns2 dang bo trong thi lwIP
+// tu hoi sang no khi cai dau khong tra loi.
+//
+// Chi la duong LUI - dns1 van la gateway nhu cu, mang binh thuong khong doi hanh vi gi. Va no
+// chi cuu duoc khi board that su ra duoc Internet; mang show khep kin thi van chiu, nhung o do
+// ten mien cung vo dung san roi nen khong mat gi.
+static const IPAddress DNS_FALLBACK(8, 8, 8, 8);
+
 // WiFi du phong - xem globals.h. Mac dinh TAT: bat len ma chua nhap SSID chi lam boot cham
 // them mot cach vo ich.
 bool wifiEnabled = false;
@@ -305,7 +319,7 @@ static bool wifiTryConnect() {
   if (ethUseStaticFirst) {
     IPAddress ip, gw, mask;
     if (ip.fromString(ethStaticIp) && gw.fromString(ethStaticGateway) && mask.fromString(ethStaticNetmask)) {
-      if (WiFi.config(ip, gw, mask, gw)) { // gw lam DNS1, giong nhanh ETH
+      if (WiFi.config(ip, gw, mask, gw, DNS_FALLBACK)) { // gw lam DNS1, 8.8.8.8 lam DNS2
         LOG("WiFi: dung IP tinh chung voi ETH - %s (gw %s, mask %s)", ethStaticIp, ethStaticGateway, ethStaticNetmask);
       } else {
         LOG("WiFi: WiFi.config() that bai - de WiFi xin DHCP");
@@ -777,7 +791,7 @@ void setup() {
     if (ip.fromString(ethStaticIp) && gw.fromString(ethStaticGateway) && mask.fromString(ethStaticNetmask)) {
       // Truyen gateway lam DNS1: ETH.config() 3 tham so de DNS trong, nen neu MQTT broker
       // duoc nhap bang hostname thay vi IP thi se khong resolve duoc o nhanh IP tinh.
-      if (ETH.config(ip, gw, mask, gw)) {
+      if (ETH.config(ip, gw, mask, gw, DNS_FALLBACK)) {
         if (gatewayReachable(gw)) {
           eth_connected = true;
           ethVerified = true;   // gateway tra loi = co mang that
@@ -816,7 +830,7 @@ void setup() {
       LOG("ETH khong len IP sau %lu ms, ap dung static fallback de Web UI van truy cap duoc", ETH_WAIT_MS);
       IPAddress fallbackIp, fallbackGw, fallbackMask;
       if (fallbackIp.fromString(ethStaticIp) && fallbackGw.fromString(ethStaticGateway) && fallbackMask.fromString(ethStaticNetmask)) {
-        if (ETH.config(fallbackIp, fallbackGw, fallbackMask, fallbackGw)) { // gw lam DNS1, xem tren
+        if (ETH.config(fallbackIp, fallbackGw, fallbackMask, fallbackGw, DNS_FALLBACK)) { // gw lam DNS1, 8.8.8.8 lam DNS2
           eth_connected = true;
           usedFallback = true;
           // Ping o day nua chu khong chi o nhanh uu tien-IP-tinh: khong hoi dap thi bo IP nay
@@ -844,6 +858,19 @@ void setup() {
   // Chot lai ket qua cua ca giai doan tren - xem giai thich o cho khai bao ethUpAtBoot.
   ethUpAtBoot = eth_connected;
   ethEverUp = eth_connected;
+
+  // In DNS dang thuc su dung. Truoc day khong in o dau ca, nen khi "nap tu link bang ten mien"
+  // im lang that bai thi khong co cach nao biet board dang hoi ai - phai di doan tung gia
+  // thuyet mot. In ra day, ngay sau khi chot xong duong mang, la re nhat va dung luc nhat.
+  if (netConnected()) {
+    IPAddress d1 = eth_connected ? ETH.dnsIP(0) : WiFi.dnsIP(0);
+    IPAddress d2 = eth_connected ? ETH.dnsIP(1) : WiFi.dnsIP(1);
+    LOG("DNS: %s / %s (qua %s)", d1.toString().c_str(), d2.toString().c_str(), netLinkName());
+    if ((uint32_t)d1 == 0) {
+      LOG("DNS: bang DNS RONG - hostByName() se that bai NGAY, khong gui goi nao. "
+          "URL dung ten mien se im lang khong chay; dung IP thi van duoc.");
+    }
+  }
 
   // Ten AP la thu duy nhat operator doc duoc tu dien thoai khi khong vao duoc Web UI, nen no
   // phai noi dung su that - diagApName() lo viec chon tag. "STATIC-192.168.99.5" tren mot board

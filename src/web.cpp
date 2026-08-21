@@ -109,6 +109,24 @@ void handleData() {
     data += "<span style='color:orange;font-weight:bold'>WiFi (dự phòng)</span> " + netLocalIP().toString();
     data += " &middot; RSSI " + String(WiFi.RSSI()) + " dBm";
   }
+  // DNS server board ĐANG THỰC SỰ dùng. Trước đây không hiện ở đâu cả - không Serial, không Web
+  // UI - nên khi "nạp từ link bằng tên miền" im lặng thất bại thì không có cách nào biết board
+  // đang hỏi ai, và việc truy nguyên phải đoán mò hết giả thuyết này tới giả thuyết khác.
+  //
+  // 0.0.0.0 ở ô đầu là dấu hiệu quyết định: bảng DNS rỗng thì hostByName() trả lỗi NGAY, không
+  // gửi gói nào ra - đúng kiểu "server không thấy request nào".
+  if (netConnected()) {
+    IPAddress d1 = eth_connected ? ETH.dnsIP(0) : WiFi.dnsIP(0);
+    IPAddress d2 = eth_connected ? ETH.dnsIP(1) : WiFi.dnsIP(1);
+    data += "<br><b>DNS:</b> ";
+    if ((uint32_t)d1 == 0) {
+      data += "<span style='color:red;font-weight:bold'>TRỐNG</span> — không phân giải được tên miền";
+    } else {
+      data += d1.toString();
+      if ((uint32_t)d2 != 0) data += " &middot; " + d2.toString();
+    }
+  }
+
   // Tach 2 nguyên nhân: gộp chung thì người đọc suy ra sai nguồn cơn (mất mạng vs. cắm lại dây).
   if (netLossReboots() > 0 || ethReturnReboots() > 0) {
     data += "<br><span style='color:#b45309'>⚠ Đã tự reboot";
