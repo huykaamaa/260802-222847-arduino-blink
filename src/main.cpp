@@ -765,6 +765,34 @@ void otaUrlTick()
 
   LOG(">>> OTA URL: bat dau tai %s <<<", otaUrl);
 
+  // Tu phan giai ten host TRUOC khi giao cho httpUpdate, chi de GHI LAI dia chi ra log.
+  //
+  // Ly do: khi that bai, httpUpdate chi tra ve -1 "connection refused" - ma ma do dung chung
+  // cho CA HAI truong hop "tra DNS hong" lan "mo TCP khong duoc" (xem NetworkClient::connect:
+  // hostByName that bai thi tra 0, va HTTPClient doi 0 thanh -1). Nen mot minh ma loi do khong
+  // noi duoc gi. Dong log nay tach bach hai kha nang, va quan trong hon: cho biet board dang
+  // goi toi DIA CHI NAO - neu ten mien bi mang loc va tra ve mot dia chi khac thi chi o day moi
+  // lo ra.
+  //
+  // Ket qua duoc lwIP cache nen lan tra cua httpUpdate ngay sau do khong ton them.
+  {
+    const char *h = otaUrl;
+    if (strncmp(h, "http://", 7) == 0) h += 7;
+    char host[64];
+    size_t n = 0;
+    while (h[n] && h[n] != ':' && h[n] != '/' && n < sizeof(host) - 1) { host[n] = h[n]; n++; }
+    host[n] = '\0';
+
+    IPAddress resolved;
+    unsigned long t0 = millis();
+    if (Network.hostByName(host, resolved)) {
+      LOG("OTA URL: '%s' -> %s (%lu ms)", host, resolved.toString().c_str(), millis() - t0);
+    } else {
+      LOG("OTA URL: KHONG phan giai duoc '%s' sau %lu ms - hong o DNS, chua he mo TCP",
+          host, millis() - t0);
+    }
+  }
+
   NetworkClient client;
   httpUpdate.rebootOnUpdate(true);
   // Server file tinh hay tra 301/302 (vd thieu dau / cuoi duong dan); khong bat theo redirect
