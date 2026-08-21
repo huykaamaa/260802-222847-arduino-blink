@@ -118,15 +118,19 @@ const char* netLinkName() { return eth_connected ? "ETH" : (wifi_connected ? "Wi
 // IP gan vao netif" - dieu do van dung khi day mang nam tren ban.
 bool netVerified() { return wifi_connected || (eth_connected && ethVerified); }
 
-// Diagnostic AP - phat wifi de doc IP ETH tren dien thoai, tu tat sau 5 phut
-static const unsigned long DIAG_AP_DURATION_MS = 5UL * 60UL * 1000UL;
-// Mat khau cho diag AP (truoc day AP nay MO hoan toan). SSID da lo dia chi IP noi bo cho moi
-// nguoi quanh phong quet thay, khong nen de bat ky ai cung vao thang duoc Web UI. Dung chung
-// "12121212" voi cac phong khac trong cum de operator chi phai nho mot cai. Luu y WPA2 yeu cau
-// toi thieu 8 ky tu - ngan hon thi softAP() se fail va mat luon duong vao nay.
+// Diagnostic AP - phat wifi de doc IP tren dien thoai thay vi phai mo Serial.
+//
+// 2026-08-21: KHONG con tu tat sau 5 phut. Ly do: nhin tu xa, chi bang danh sach WiFi tren
+// dien thoai, phai phan biet duoc "board chay va co mang" (thay ten kem IP), "board chay
+// nhung mat mang" (thay ten NOLINK/OFFLINE) va "board mat dien" (khong thay gi ca). Tat sau
+// 5 phut thi hai truong hop sau nhin y het nhau.
 static const char *DIAG_AP_PASS = "12121212";
 bool diagApActive = false;
-unsigned long diagApStartMs = 0;
+// Ten dang phat. Giu lai de biet khi nao no khong con dung su that nua - xem diagApTick().
+static String diagApSsid;
+// Nhanh nao da cap IP: true = IP tinh du phong. diagApTick() can no de dung tien to cu khi
+// phat lai ten, nen phai o pham vi file chu khong con la bien cuc bo trong setup().
+static bool ethUsedFallback = false;
 
 // MQTT
 esp_mqtt_client_handle_t mqtt = nullptr;
@@ -446,9 +450,19 @@ static bool gatewayReachable(IPAddress gw)
   return gwPingGotReply;
 }
 
-// Phat 1 AP co SSID chua IP hien tai cua ETH, de xem IP qua wifi tren dien thoai thay vi phai
-// mo Serial. Co mat khau DIAG_AP_PASS. Tu tat sau DIAG_AP_DURATION_MS (xu ly trong loop()).
-static void startDiagAp(const char *tag) {
+// Ten diag AP nen la gi NGAY LUC NAY. Tach rieng khoi startDiagAp() de diagApTick() dung lai
+// duoc - AP phat mai nen ten phai theo kip trang thai, xem diagApTick().
+//
+// Tag toi da 8 ky tu: SSID chuan 802.11 gioi han 32, ma "GIASACH-" (8) + tag + "-" (1) + IPv4
+// dai nhat (15) = 24 + tag.
+static String diagApName() {
+  const char *tag;
+  if (!netConnected())     tag = "NOLINK";
+  else if (!eth_connected) tag = "WIFI";
+  else if (!ethVerified)   tag = "OFFLINE";
+  else if (ethUsedFallback) tag = "STATIC";
+  else                     tag = "DHCP";
+
   // Khong co duong mang nao thi khong co IP de dan vao ten AP - de tran tag ("NOLINK"), dung
   // dan "0.0.0.0" vao lam operator tuong day la mot dia chi that.
   String ssid = String("GIASACH-") + tag;
@@ -456,17 +470,37 @@ static void startDiagAp(const char *tag) {
   // Chan cung theo gioi han SSID cua 802.11. Khong cat thi softAP() that bai va operator mat
   // duong vao cuoi cung - hong am tham dung luc moi thu khac cung dang hong.
   if (ssid.length() > 32) ssid = ssid.substring(0, 32);
+  return ssid;
+}
+
+// Phat 1 AP co SSID chua trang thai + IP hien tai, de doc tren dien thoai thay vi phai mo
+// Serial. Co mat khau DIAG_AP_PASS. KHONG con tu tat - xem khai bao diagApSsid.
+static void startDiagAp() {
+  String ssid = diagApName();
   // Da bat STA thi PHAI la AP_STA: WIFI_AP thuan se tat luon STA. Dieu kien la wifiStaActive
   // chu khong phai wifiFallbackActive - neu chi giu STA khi da ket noi duoc thi truong hop
   // "chua ket noi duoc, dang cho thu lai" se bi cat dut ngay tai day.
   WiFi.mode(wifiStaActive ? WIFI_AP_STA : WIFI_AP);
   if (WiFi.softAP(ssid.c_str(), DIAG_AP_PASS)) {
     diagApActive = true;
-    diagApStartMs = millis();
+    diagApSsid = ssid;
     LOG("Diag AP: broadcasting %s", ssid.c_str());
   } else {
     LOG("Diag AP: softAP() failed");
   }
+}
+
+// Ten AP phai theo kip trang thai. Truoc day 5 phut la du ngan de khong kip doi gi; gio no phat
+// mai nen mot cai ten sai se sai mai - va day dung la cai ten operator dua vao de ket luan tu
+// xa. Rut day mang ra thi ten phai doi thanh NOLINK, cam lai thi phai quay ve dia chi that.
+//
+// Chi goi lai softAP() khi ten THUC SU khac: no da may dang noi vao AP ra, khong lam bua duoc.
+static void diagApTick() {
+  if (!diagApActive) return;
+  String want = diagApName();
+  if (want == diagApSsid) return;
+  LOG("Diag AP: trang thai doi %s -> %s", diagApSsid.c_str(), want.c_str());
+  startDiagAp();
 }
 
 // ======================================================================
@@ -811,28 +845,20 @@ void setup() {
   ethUpAtBoot = eth_connected;
   ethEverUp = eth_connected;
 
-  if (netConnected()) {
-    // Ten AP la thu duy nhat operator doc duoc tu dien thoai khi khong vao duoc Web UI, nen no
-    // phai noi dung su that. "STATIC-192.168.99.5" tren mot board khong cam day mang la mot loi
-    // noi doi rat dat: nguoi ta se di tim IP do tren mang thay vi di kiem tra soi day.
-    //
-    // Tag toi da 8 ky tu: SSID chuan 802.11 gioi han 32, ma "GIASACH-" (8) + tag + "-" (1) +
-    // IPv4 dai nhat (15) = 24 + tag. Vuot qua thi softAP() that bai va mat luon duong nay.
-    const char *tag;
-    if (!eth_connected)      tag = "WIFI";
-    else if (!ethVerified)   tag = "OFFLINE";
-    else if (usedFallback)   tag = "STATIC";
-    else                     tag = "DHCP";
-    startDiagAp(tag);
-  } else {
-    // Van phat diag AP du khong co mang: day la duong vao Web UI cuoi cung con lai (noi vao AP
-    // roi mo http://192.168.4.1) de con sua duoc SSID/IP tinh ma khong phai cam laptop + Serial
-    // vao tan noi. Truoc day truong hop nay tu co Web UI vi nhanh static fallback dat
-    // eth_connected = true ke ca khi rut day mang - gio nhanh do da bi chan (xem tren) nen
-    // phai phat AP mot cach co chu dich.
+  // Ten AP la thu duy nhat operator doc duoc tu dien thoai khi khong vao duoc Web UI, nen no
+  // phai noi dung su that - diagApName() lo viec chon tag. "STATIC-192.168.99.5" tren mot board
+  // khong cam day mang la mot loi noi doi rat dat: nguoi ta se di tim IP do tren mang thay vi
+  // di kiem tra soi day.
+  //
+  // Phat CA khi khong co mang (tag "NOLINK"): vua la duong vao Web UI cuoi cung con lai (noi
+  // vao AP roi mo http://192.168.4.1) de con sua duoc SSID/IP tinh ma khong phai cam laptop +
+  // Serial vao tan noi, vua la cach phan biet tu xa giua "board chay nhung mat mang" voi "board
+  // mat dien" (khong thay AP nao ca).
+  if (!netConnected()) {
     LOG("Khong co IP tren ca ETH lan WiFi - phat diag AP de con vao Web UI qua 192.168.4.1");
-    startDiagAp("NOLINK");
   }
+  ethUsedFallback = usedFallback;
+  startDiagAp();
 
   server.on("/", HTTP_GET, handleRoot);
   server.on("/data", HTTP_GET, handleData);
@@ -1024,14 +1050,7 @@ void loop() {
     server.handleClient();
   }
 
-  if (diagApActive && (millis() - diagApStartMs) >= DIAG_AP_DURATION_MS) {
-    WiFi.softAPdisconnect(true);
-    // WIFI_OFF chi khi phien nay khong dung toi WiFi. Da bat STA thi giu lai, ke ca khi chua
-    // ket noi duoc: tat radio o day la chot chan cuoi cung lam WiFi khong con co hoi nao nua.
-    WiFi.mode(wifiStaActive ? WIFI_STA : WIFI_OFF);
-    diagApActive = false;
-    LOG("Diag AP: turned off");
-  }
+  diagApTick();
 
   updateTestSequence();
   checkSensors();

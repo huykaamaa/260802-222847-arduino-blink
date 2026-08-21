@@ -89,7 +89,6 @@ uint32_t netLossReboots();     // reboot vi MAT ETH giua chung
 uint32_t ethReturnReboots();   // reboot vi CAM LAI day ETH (de quay ve IP tinh)
 
 extern bool diagApActive;
-extern unsigned long diagApStartMs;
 
 // MQTT
 extern esp_mqtt_client_handle_t mqtt;
