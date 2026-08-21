@@ -436,7 +436,13 @@ static void wifiRetryTick() {
     // su chay bang WiFi, cac cho khac doc co nay de biet dieu do.
     if (!wifiFallbackActive) {
       wifiFallbackActive = true;
-      LOG("WiFi: da ket noi o lan thu lai - IP %s", WiFi.localIP().toString().c_str());
+      // Chot netif mac dinh o day nua, khong chi trong setup(): duong nay la khi lan thu luc
+      // boot THAT BAI va mai sau moi vao duoc, tuc doan trong setup() da chay xong tu lau voi
+      // wifi_connected con la false. Bo sot thi board vao duoc mang ma van khong ra noi
+      // Internet - xem giai thich day du o setup().
+      WiFi.STA.setDefault();
+      LOG("WiFi: da ket noi o lan thu lai - IP %s (netif mac dinh: ETH=%d STA=%d)",
+          WiFi.localIP().toString().c_str(), (int)ETH.isDefault(), (int)WiFi.STA.isDefault());
     }
     return;
   }
@@ -948,6 +954,26 @@ void setup() {
   // Chot lai ket qua cua ca giai doan tren - xem giai thich o cho khai bao ethUpAtBoot.
   ethUpAtBoot = eth_connected;
   ethEverUp = eth_connected;
+
+  // CHOT NETIF MAC DINH ve dung duong dang chay.
+  //
+  // Netif mac dinh la thu quyet dinh goi tin di dau khi dich KHONG nam trong subnet cua minh -
+  // tuc MOI THU ra ngoai Internet. Dich trong cung subnet thi lwIP tu khop theo dia chi, khong
+  // can den no; nen mot netif mac dinh sai cho ra dung trieu chung da gap: Web UI chay, MQTT
+  // noi bo chay, DNS toi gateway chay, ma khong mo noi TCP toi bat ky dia chi Internet nao.
+  //
+  // esp_netif tu chon netif mac dinh dua tren su kien GOT_IP. Ma dat IP TINH thi GOT_IP KHONG
+  // duoc ban ra - chinh comment trong wifiTryConnect() da ghi nhan dieu do. Core Arduino cung
+  // khong bao gio tu goi setDefault(). Board nay lai la board DUY NHAT trong cum co HAI netif
+  // (ETH khong cam day + WiFi), nen no la board duy nhat co the chot nham.
+  //
+  // Goi thang, khong dua vao suy doan cua ai ca.
+  if (eth_connected) {
+    ETH.setDefault();
+  } else if (wifi_connected) {
+    WiFi.STA.setDefault();
+  }
+  LOG("Netif mac dinh: ETH=%d STA=%d", (int)ETH.isDefault(), (int)WiFi.STA.isDefault());
 
   // In DNS dang thuc su dung. Truoc day khong in o dau ca, nen khi "nap tu link bang ten mien"
   // im lang that bai thi khong co cach nao biet board dang hoi ai - phai di doan tung gia
